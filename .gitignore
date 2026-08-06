@@ -1,0 +1,47 @@
+__pycache__/
+*.py[cod]
+.env
+data/
+.pytest_cache/
+.venv/
+venv/
+Scripts/
+Lib/
+Include/
+pyvenv.cfg
+.coverage
+.mypy_cache/
+.ruff_cache/
+
+# HBuilderX / uni-app build output
+unpackage/
+.hbuilderx/
+frontend/unpackage/
+frontend/.hbuilderx/
+
+# Local staging copy; canonical frontend source is in frontend/
+web_stage/
+
+# Private/reference media and generated assets kept outside source control
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+/*.wav
+/*.flac
+/*.mp3
+/*.m4a
+/*.m4s
+/*.mp4
+/*.mov
+/*.webm
+/*.mkv
+
+# Experimental and duplicate ComfyUI exports not used by the application
+/indextts2-basic.json
+/indextts2-basic_api.json
+/indextts2-basic_emo.json
+/YZ金鱼-单人InfiniteTalk官方版工作流.json
+/YZ金鱼-单人InfiniteTalk官方版工作流2.json
+/音频克隆+音频生成Qwen3+TTS++IndexTTS2+最新音色克隆带语气情感.json
+/音频克隆+音频生成Qwen3+TTS++IndexTTS2+最新音色克隆带语气情感_api.json

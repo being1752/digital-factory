@@ -1,0 +1,19 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "数字人工厂",
+        "navigationStyle": "custom",
+        "backgroundColor": "#0b0d12"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "数字人工厂",
+    "navigationBarBackgroundColor": "#0b0d12",
+    "backgroundColor": "#0b0d12"
+  },
+  "uniIdRouter": {}
+}

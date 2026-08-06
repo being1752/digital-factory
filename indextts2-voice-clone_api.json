@@ -1,0 +1,99 @@
+{
+  "12": {
+    "inputs": {
+      "top_k": 30,
+      "top_p": 0.8,
+      "temperature": 0.8,
+      "num_beams": 3,
+      "max_mel_tokens": 1500,
+      "max_text_tokens_per_sentence": 120,
+      "custom_cuda_kernel": false,
+      "deepspeed": false,
+      "unload_model": true,
+      "audio": [
+        "37",
+        0
+      ],
+      "text": [
+        "14",
+        0
+      ],
+      "emo_audio_prompt": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "IndexTTS2Run",
+    "_meta": {
+      "title": "IndexTTS2 Run"
+    }
+  },
+  "13": {
+    "inputs": {
+      "audio": "reference_voice.m4a"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载参考音色"
+    }
+  },
+  "14": {
+    "inputs": {
+      "value": "目标口播稿"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "目标口播稿"
+    }
+  },
+  "15": {
+    "inputs": {
+      "audio": "reference_emotion.m4a"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载情感参考音频"
+    }
+  },
+  "17": {
+    "inputs": {
+      "filename_prefix": "digital_factory/index_voice_clone",
+      "audio": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "SaveAudio",
+    "_meta": {
+      "title": "保存音频"
+    }
+  },
+  "37": {
+    "inputs": {
+      "start_time": "0:00",
+      "end_time": "0:12",
+      "audio": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "AudioCrop",
+    "_meta": {
+      "title": "截取参考音色"
+    }
+  },
+  "38": {
+    "inputs": {
+      "start_time": "0:00",
+      "end_time": "0:12",
+      "audio": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "AudioCrop",
+    "_meta": {
+      "title": "截取情感参考音频"
+    }
+  }
+}
