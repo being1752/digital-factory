@@ -51,10 +51,39 @@ class ProjectRepository:
             )
             db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_production_tasks_queue
                 ON production_tasks(status, priority DESC, created_at ASC)
                 """
             )
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        with self.lock, self._connect() as db:
+            row = db.execute(
+                "SELECT value FROM app_settings WHERE key = ?", (key,)
+            ).fetchone()
+        return str(row["value"]) if row else default
+
+    def set_setting(self, key: str, value: str) -> str:
+        timestamp = now_iso()
+        with self.lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, value, timestamp),
+            )
+        return value
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -139,13 +168,11 @@ class ProjectRepository:
             "id": task_id,
             "project_id": project_id,
             "project_title": snapshot.get("title", project_id),
-            "comfy_url": snapshot.get("comfy_url", ""),
             "snapshot_updated_at": snapshot.get("updated_at"),
             "snapshot": {
                 key: snapshot.get(key)
                 for key in (
                     "title",
-                    "comfy_url",
                     "original_script",
                     "purpose",
                     "audience",

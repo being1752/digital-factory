@@ -31,6 +31,11 @@ class TaskRunner:
         self.compiler = compiler
         self.tasks: dict[str, asyncio.Task[None]] = {}
 
+    def _comfy_url(self) -> str:
+        return self.repository.get_setting(
+            "comfy_url", self.settings.default_comfy_url
+        )
+
     def start(self, project_id: str, stage: str) -> None:
         existing = self.tasks.get(project_id)
         if existing and not existing.done():
@@ -89,7 +94,7 @@ class TaskRunner:
             await self.analyze(project_id)
             project = self._project(project_id)
         self.repository.update(project_id, status="UPLOADING_REFERENCE_AUDIO", progress=5)
-        client = ComfyUIClient(project["comfy_url"], self.settings.comfy_timeout_seconds)
+        client = ComfyUIClient(self._comfy_url(), self.settings.comfy_timeout_seconds)
         remote_voice = await client.upload(
             Path(project["voice_path"]), f"{project_id}_reference{Path(project['voice_path']).suffix}"
         )
@@ -194,7 +199,7 @@ class TaskRunner:
             await self.resume_video(project_id)
             return
         self.repository.update(project_id, status="UPLOADING_VIDEO_ASSETS", progress=3)
-        client = ComfyUIClient(project["comfy_url"], self.settings.comfy_timeout_seconds)
+        client = ComfyUIClient(self._comfy_url(), self.settings.comfy_timeout_seconds)
         image_path, audio_path = Path(project["image_path"]), Path(project["audio_path"])
         video_segments = [
             {
@@ -230,7 +235,7 @@ class TaskRunner:
         prompt_id = str(project.get("video_prompt_id") or "").strip()
         if not prompt_id:
             raise ValueError("项目没有可恢复的 ComfyUI 视频 prompt_id")
-        client = ComfyUIClient(project["comfy_url"], self.settings.comfy_timeout_seconds)
+        client = ComfyUIClient(self._comfy_url(), self.settings.comfy_timeout_seconds)
         self.repository.update(
             project_id, status="GENERATING_VIDEO", progress=10, error=None
         )
@@ -241,7 +246,7 @@ class TaskRunner:
         self, project_id: str, prompt_id: str, history: dict[str, Any]
     ) -> None:
         project = self._project(project_id)
-        client = ComfyUIClient(project["comfy_url"], self.settings.comfy_timeout_seconds)
+        client = ComfyUIClient(self._comfy_url(), self.settings.comfy_timeout_seconds)
         artifact = self._pick_artifact(client.artifacts(history), {".mp4", ".webm", ".mov", ".mkv"})
         extension = Path(artifact["filename"]).suffix.lower() or ".mp4"
         output = self._project_dir(project) / "output" / f"final{extension}"

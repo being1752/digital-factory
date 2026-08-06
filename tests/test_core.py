@@ -510,6 +510,9 @@ class CoreTests(unittest.TestCase):
         from app.main import app
 
         schema = app.openapi()
+        self.assertIn("/api/settings", schema["paths"])
+        self.assertIn("get", schema["paths"]["/api/settings"])
+        self.assertIn("patch", schema["paths"]["/api/settings"])
         self.assertIn("/api/projects/default", schema["paths"])
         self.assertIn("/api/projects/{project_id}/assets/{kind}", schema["paths"])
         self.assertIn("/api/projects/{project_id}/enqueue", schema["paths"])
@@ -567,6 +570,42 @@ class CoreTests(unittest.TestCase):
         )
         self.assertTrue(payload.expect_image_upload)
         self.assertTrue(payload.expect_voice_upload)
+
+    def test_project_payload_does_not_accept_per_task_comfy_url(self) -> None:
+        from app.schemas import ProjectPatch
+
+        self.assertNotIn("comfy_url", ProjectCreate.model_fields)
+        self.assertNotIn("comfy_url", ProjectPatch.model_fields)
+
+    def test_repository_persists_global_comfy_url(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "jobs.db"
+            first = ProjectRepository(database)
+            self.assertEqual(
+                first.get_setting("comfy_url", "http://fallback.test"),
+                "http://fallback.test",
+            )
+            first.set_setting("comfy_url", "http://comfy.global")
+            second = ProjectRepository(database)
+            self.assertEqual(
+                second.get_setting("comfy_url", "http://fallback.test"),
+                "http://comfy.global",
+            )
+
+    def test_task_runner_uses_global_comfy_url(self) -> None:
+        from app.orchestrator import TaskRunner
+
+        with tempfile.TemporaryDirectory() as directory:
+            repository = ProjectRepository(Path(directory) / "jobs.db")
+            repository.set_setting("comfy_url", "http://comfy.global")
+            runner = TaskRunner(
+                settings,
+                repository,
+                None,  # type: ignore[arg-type]
+                None,  # type: ignore[arg-type]
+                None,  # type: ignore[arg-type]
+            )
+            self.assertEqual(runner._comfy_url(), "http://comfy.global")
 
     def test_repository_can_delete_one_project_without_touching_others(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

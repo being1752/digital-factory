@@ -4,7 +4,7 @@ FastAPI 后端服务，将 AI 导演、IndexTTS2 情绪语音和 InfiniteTalk �
 
 ## 已实现
 
-- 使用用户填写的完整 ComfyUI URL，不追加端口；
+- 使用全局配置面板保存的完整 ComfyUI URL，不追加端口；
 - 检查 ComfyUI 节点依赖；
 - 上传数字人图片和参考音色，也可直接使用目录中的默认素材；
 - AI 图片分析、口播润色和情绪设计；
@@ -94,11 +94,13 @@ FRONTEND_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:80
 
 ## 推荐使用顺序
 
-1. 输入 ComfyUI URL，点击“检测”；
+1. 在页面顶部“ComfyUI 全局配置”面板输入 URL，点击“检测”后保存；
 2. 创建项目；
 3. 运行 AI 导演分析并审核口播稿；
 4. 生成和试听音频，检查精确语音时间轴与跨窗口标记，审核每 4 秒动作；
 5. 生成最终视频。
+
+ComfyUI URL 会保存到后端 SQLite 配置中。任务面板不再单独填写地址，保存后所有手动任务和队列任务都使用当前全局配置；`DEFAULT_COMFY_URL` 仅作为尚未保存配置时的初始默认值。
 
 生成文件位于 `data/jobs/<项目ID>/`。编译后的 TTS 和视频 API 工作流也会保留，便于排错。
 
@@ -114,7 +116,7 @@ FRONTEND_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:80
 ```
 
 后端本身不运行 IndexTTS2 或 InfiniteTalk 模型；ComfyUI 可以部署在另一台
-Windows/Linux GPU 服务器上。后端服务器必须能够访问填写的 ComfyUI URL。
+Windows/Linux GPU 服务器上。后端服务器必须能够访问全局配置面板保存的 ComfyUI URL。
 
 ### 通用要求
 

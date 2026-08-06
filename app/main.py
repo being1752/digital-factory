@@ -18,7 +18,13 @@ from .config import settings
 from .orchestrator import TaskRunner
 from .production_queue import ProductionQueue
 from .repository import ProjectRepository
-from .schemas import ComfyCheckRequest, ProjectCreate, ProjectPatch, TTS_ENGINES
+from .schemas import (
+    AppSettingsPatch,
+    ComfyCheckRequest,
+    ProjectCreate,
+    ProjectPatch,
+    TTS_ENGINES,
+)
 from .workflows import REQUIRED_VIDEO_NODES, WorkflowCompiler, required_tts_nodes
 
 
@@ -48,8 +54,13 @@ runner = TaskRunner(settings, repository, director, aligner, compiler)
 production_queue = ProductionQueue(repository, runner)
 
 
+def global_comfy_url() -> str:
+    return repository.get_setting("comfy_url", settings.default_comfy_url)
+
+
 def public_project(project: dict[str, Any]) -> dict[str, Any]:
     hidden = {
+        "comfy_url",
         "image_path",
         "voice_path",
         "emotion_voice_path",
@@ -169,10 +180,6 @@ async def save_upload(upload: UploadFile, destination: Path, limit: int) -> None
 
 
 def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
-    try:
-        comfy_url = ComfyUIClient.normalize_url(payload.comfy_url)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
     if not payload.original_script.strip():
         raise HTTPException(422, "口播文案不能为空")
     image_source = settings.root / "专业肖像照.png"
@@ -201,7 +208,6 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
         {
             "id": project_id,
             "title": payload.title.strip() or "未命名项目",
-            "comfy_url": comfy_url,
             "original_script": payload.original_script.strip(),
             "purpose": payload.purpose.strip(),
             "audience": payload.audience.strip(),
@@ -253,9 +259,23 @@ async def check_comfyui(payload: ComfyCheckRequest) -> dict[str, Any]:
         raise HTTPException(502, f"ComfyUI 检查失败：{exc}") from exc
 
 
+@app.get("/api/settings")
+async def get_app_settings() -> dict[str, str]:
+    return {"comfy_url": global_comfy_url()}
+
+
+@app.patch("/api/settings")
+async def patch_app_settings(payload: AppSettingsPatch) -> dict[str, str]:
+    try:
+        comfy_url = ComfyUIClient.normalize_url(payload.comfy_url)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    repository.set_setting("comfy_url", comfy_url)
+    return {"comfy_url": comfy_url}
+
+
 @app.post("/api/projects")
 async def create_project(
-    comfy_url: Annotated[str, Form()],
     original_script: Annotated[str, Form()],
     title: Annotated[str, Form()] = "未命名项目",
     purpose: Annotated[str, Form()] = "品牌口播",
@@ -267,10 +287,6 @@ async def create_project(
     voice: Annotated[UploadFile | None, File()] = None,
     emotion_voice: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, Any]:
-    try:
-        comfy_url = ComfyUIClient.normalize_url(comfy_url)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
     if not original_script.strip():
         raise HTTPException(422, "口播文案不能为空")
     if tts_engine not in TTS_ENGINES:
@@ -319,7 +335,6 @@ async def create_project(
         {
             "id": project_id,
             "title": title.strip() or "未命名项目",
-            "comfy_url": comfy_url,
             "original_script": original_script.strip(),
             "purpose": purpose.strip(),
             "audience": audience.strip(),
@@ -481,11 +496,6 @@ async def delete_production_task(task_id: str) -> dict[str, Any]:
 async def patch_project(project_id: str, patch: ProjectPatch) -> dict[str, Any]:
     project = get_project(project_id)
     changes = patch.model_dump(exclude_none=True)
-    if "comfy_url" in changes:
-        try:
-            changes["comfy_url"] = ComfyUIClient.normalize_url(changes["comfy_url"])
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
     if "emotion" in changes:
         changes["emotion"] = patch.emotion.model_dump() if patch.emotion else {}
     if "segments" in changes:

@@ -5,9 +5,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from .config import DEFAULT_COMFY_URL
-
-
 EMOTION_KEYS = ("Happy", "Angry", "Sad", "Fear", "Hate", "Low", "Surprise", "Neutral")
 TTSEngine = Literal["indextts2_legacy", "indextts2_voice_clone"]
 TTS_ENGINES = {"indextts2_legacy", "indextts2_voice_clone"}
@@ -59,7 +56,6 @@ class Segment(BaseModel):
 
 
 class ProjectPatch(BaseModel):
-    comfy_url: str | None = None
     script: str | None = None
     emotion: EmotionVector | None = None
     segments: list[Segment] | None = None
@@ -72,8 +68,11 @@ class ComfyCheckRequest(BaseModel):
     tts_engine: TTSEngine = "indextts2_legacy"
 
 
+class AppSettingsPatch(BaseModel):
+    comfy_url: str
+
+
 class ProjectCreate(BaseModel):
-    comfy_url: str = DEFAULT_COMFY_URL
     original_script: str
     title: str = "未命名项目"
     purpose: str = "品牌口播"
