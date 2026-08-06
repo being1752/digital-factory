@@ -85,7 +85,7 @@ class WorkflowCompiler:
     ) -> dict[str, Any]:
         if engine == "indextts2_voice_clone":
             if not emotion_reference_audio:
-                raise ValueError("新版 IndexTTS2 需要情感参考音频")
+                raise ValueError("IndexTTS2 音色与情感克隆版需要情感参考音频")
             return self._compile_voice_clone_tts(
                 script, reference_audio, emotion_reference_audio
             )

@@ -20,7 +20,7 @@ FastAPI 后端服务，将 AI 导演、IndexTTS2 情绪语音和 InfiniteTalk �
 - 在线编辑文案、情绪和每段动作；
 - SQLite 任务记录、过程文件留档、音频试听和视频下载。
 - 新建项目可选择手动模式或全自动模式；全自动任务进入 SQLite 持久化 FIFO 队列，AI 导演失败后每 3 秒持续重试，成功后自动完成音频、对齐和视频；重试期间可取消释放队列。
-- 音频生成可按任务选择原版 IndexTTS2 情绪向量流程，或新版 IndexTTS2 音色＋情感双参考流程；两套 API 模板互不影响。
+- 音频生成可按任务选择 IndexTTS2 基础情感版（`indextts2-basic_emo_api.json`）或 IndexTTS2 音色与情感克隆版（`indextts2-voice-clone_api.json`）；两套 API 模板互不影响。
 
 ## 启动
 
@@ -98,7 +98,7 @@ npm install
 npm run dev:h5
 ```
 
-前端页面顶部可以修改后端 API 地址。跨域来源通过以下配置控制：
+使用独立前端/后端域名时，前端通过 `VITE_API_BASE_URL` 指定后端地址，后端跨域来源通过以下配置控制：
 
 ```env
 FRONTEND_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080
@@ -354,10 +354,10 @@ DEFAULT_COMFY_URL=http://192.168.1.30:8188
 
 ### 前端与跨域
 
-前端页面顶部的“后端 API”填写正式地址，例如：
+构建前端时指定正式后端地址，例如：
 
-```text
-https://api.example.com
+```bash
+VITE_API_BASE_URL=https://api.example.com npm run build:h5
 ```
 
 后端 `.env` 同时加入实际前端来源（只写协议、域名和端口，不写路径）：

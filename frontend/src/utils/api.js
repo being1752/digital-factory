@@ -12,15 +12,7 @@ function runtimeDefaultApi() {
 }
 
 export function getApiBase() {
-  const saved = String(uni.getStorageSync('digital_factory_api') || '').trim()
-  return (saved || runtimeDefaultApi()).replace(/\/$/, '')
-}
-export function setApiBase(value) {
-  const input = String(value || '').trim().replace(/\/$/, '')
-  const normalized = input || runtimeDefaultApi()
-  if (input) uni.setStorageSync('digital_factory_api', input)
-  else uni.removeStorageSync('digital_factory_api')
-  return normalized
+  return runtimeDefaultApi().replace(/\/$/, '')
 }
 
 export function fileUrl(path) {

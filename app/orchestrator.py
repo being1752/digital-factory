@@ -103,7 +103,7 @@ class TaskRunner:
         if engine == "indextts2_voice_clone":
             emotion_path = Path(project.get("emotion_voice_path") or "")
             if not emotion_path.is_file():
-                raise ValueError("新版 IndexTTS2 缺少情感参考音频")
+                raise ValueError("IndexTTS2 音色与情感克隆版缺少情感参考音频")
             remote_emotion_voice = await client.upload(
                 emotion_path,
                 f"{project_id}_emotion_reference{emotion_path.suffix}",

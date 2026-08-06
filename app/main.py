@@ -192,7 +192,7 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
         payload.tts_engine == "indextts2_voice_clone"
         and not payload.expect_emotion_voice_upload
     ):
-        raise HTTPException(422, "新版 IndexTTS2 请选择并上传情感参考音频")
+        raise HTTPException(422, "IndexTTS2 音色与情感克隆版请选择并上传情感参考音频")
     project_id = uuid.uuid4().hex[:12]
     project_dir = settings.data_dir / "jobs" / project_id
     input_dir = project_dir / "input"
@@ -292,7 +292,7 @@ async def create_project(
     if tts_engine not in TTS_ENGINES:
         raise HTTPException(422, "未知音频流程")
     if tts_engine == "indextts2_voice_clone" and emotion_voice is None:
-        raise HTTPException(422, "新版 IndexTTS2 需要情感参考音频")
+        raise HTTPException(422, "IndexTTS2 音色与情感克隆版需要情感参考音频")
 
     project_id = uuid.uuid4().hex[:12]
     project_dir = settings.data_dir / "jobs" / project_id

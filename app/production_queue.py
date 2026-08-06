@@ -54,7 +54,7 @@ class ProductionQueue:
         if project.get("tts_engine") == "indextts2_voice_clone":
             emotion_voice = Path(project.get("emotion_voice_path") or "")
             if not emotion_voice.is_file():
-                raise ValueError("新版 IndexTTS2 缺少可用的情感参考音频")
+                raise ValueError("IndexTTS2 音色与情感克隆版缺少可用的情感参考音频")
         if project.get("auto_run") is False:
             raise ValueError("项目未勾选全自动执行，请在项目详情中手动操作")
         task = self.repository.enqueue_task(project_id, project, priority)
