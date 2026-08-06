@@ -1,3 +1,5 @@
 unpackage/
+dist/
+node_modules/
 .DS_Store
 .hbuilderx/

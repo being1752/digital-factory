@@ -1,3 +1,8 @@
+param(
+    [switch]$BackendOnly,
+    [switch]$SkipFrontendInstall
+)
+
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -43,5 +48,57 @@ if ($pythonExecutable -ne $venvPython) {
     Write-Warning "Local venv dependencies are missing; using $pythonExecutable"
 }
 
-Write-Host "Digital Factory starting: http://127.0.0.1:8000"
-& $pythonExecutable -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+$frontendProcess = $null
+if (-not $BackendOnly) {
+    $frontendRoot = Join-Path $projectRoot 'frontend'
+    $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+    $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $nodeCommand -or -not $npmCommand) {
+        Write-Error 'Node.js and npm are required for the frontend. Use -BackendOnly to start only the API.'
+        exit 1
+    }
+
+    $uniCli = Join-Path $frontendRoot 'node_modules\@dcloudio\vite-plugin-uni\bin\uni.js'
+    if (-not (Test-Path -LiteralPath $uniCli -PathType Leaf)) {
+        if ($SkipFrontendInstall) {
+            Write-Error 'Frontend dependencies are missing. Run: cd frontend; npm install'
+            exit 1
+        }
+        Write-Host 'Installing frontend dependencies...'
+        & $npmCommand.Source install --prefix $frontendRoot
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error 'Frontend dependency installation failed.'
+            exit $LASTEXITCODE
+        }
+    }
+
+    $logDirectory = Join-Path $projectRoot 'data\logs'
+    New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+    $frontendOutput = Join-Path $logDirectory 'frontend-dev.log'
+    $frontendError = Join-Path $logDirectory 'frontend-dev-error.log'
+    $frontendStart = @{
+        FilePath = $nodeCommand.Source
+        ArgumentList = @($uniCli)
+        WorkingDirectory = $frontendRoot
+        WindowStyle = 'Hidden'
+        RedirectStandardOutput = $frontendOutput
+        RedirectStandardError = $frontendError
+        PassThru = $true
+    }
+    $frontendProcess = Start-Process @frontendStart
+    Start-Sleep -Seconds 2
+    if ($frontendProcess.HasExited) {
+        Write-Error "Frontend failed to start. See $frontendError"
+        exit 1
+    }
+    Write-Host 'Digital Factory frontend: http://127.0.0.1:5173'
+}
+
+Write-Host 'Digital Factory backend:  http://127.0.0.1:8000'
+try {
+    & $pythonExecutable -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+} finally {
+    if ($frontendProcess -and -not $frontendProcess.HasExited) {
+        Stop-Process -Id $frontendProcess.Id
+    }
+}

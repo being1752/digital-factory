@@ -1,11 +1,25 @@
-const DEFAULT_API = 'http://127.0.0.1:8000'
+function runtimeDefaultApi() {
+  const configured = String(import.meta.env.VITE_API_BASE_URL || '').trim()
+  if (configured) return configured.replace(/\/$/, '')
+
+  // #ifdef H5
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin
+  }
+  // #endif
+
+  return 'http://127.0.0.1:8000'
+}
 
 export function getApiBase() {
-  return (uni.getStorageSync('digital_factory_api') || DEFAULT_API).replace(/\/$/, '')
+  const saved = String(uni.getStorageSync('digital_factory_api') || '').trim()
+  return (saved || runtimeDefaultApi()).replace(/\/$/, '')
 }
 export function setApiBase(value) {
-  const normalized = String(value || '').trim().replace(/\/$/, '') || DEFAULT_API
-  uni.setStorageSync('digital_factory_api', normalized)
+  const input = String(value || '').trim().replace(/\/$/, '')
+  const normalized = input || runtimeDefaultApi()
+  if (input) uni.setStorageSync('digital_factory_api', input)
+  else uni.removeStorageSync('digital_factory_api')
   return normalized
 }
 

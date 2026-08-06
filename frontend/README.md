@@ -1,14 +1,47 @@
 # digital_factory_web
 
-数字人工厂的独立 uni-app Vue 3 前端。后端位于仓库根目录，默认访问
-`http://127.0.0.1:8000`。
+数字人工厂的独立 uni-app Vue 3 + Vite 前端。后端位于仓库根目录，默认访问
+`http://127.0.0.1:8000`，不依赖 HBuilderX。
 
 ## 启动
 
-1. 在后端目录运行 `run.ps1`；
-2. 使用 HBuilderX 打开本目录；
-3. 选择“运行 → 运行到浏览器 → Chrome”；
-4. 页面顶部可修改后端 API 地址，并在“ComfyUI 全局配置”面板保存 ComfyUI URL。
+在仓库根目录一键启动前后端：
+
+```powershell
+.\run.ps1
+```
+
+也可以单独启动前端：
+
+```powershell
+cd frontend
+npm install
+npm run dev:h5
+```
+
+前端默认地址为 `http://127.0.0.1:5173`。页面顶部可修改后端 API 地址，并在
+“ComfyUI 全局配置”面板保存 ComfyUI URL。
+
+局域网其他设备可访问 `http://服务器IP:5173`。H5 默认使用同源 `/api`，由
+Vite 在服务器内部转发到 `http://127.0.0.1:8000`，因此远程浏览器不会错误连接
+访问者自己的 `127.0.0.1`，也无需为开发服务器放宽后端 CORS。
+
+使用独立后端域名时，可以在启动或构建前配置：
+
+```powershell
+$env:VITE_API_BASE_URL='https://api.example.com'
+npm run build:h5
+```
+
+## 构建
+
+```powershell
+npm run build:h5
+```
+
+生产文件生成到 `dist/build/h5/`，可以由 Nginx 或其他静态文件服务器部署。
+生产服务器应把同域 `/api` 反向代理到 FastAPI；或者在构建时设置
+`VITE_API_BASE_URL`。
 
 ComfyUI URL 由后端持久化保存，新建任务和项目详情中不再单独设置；保存后的手动任务和队列任务统一使用该地址。
 
