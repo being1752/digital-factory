@@ -45,17 +45,24 @@ class ProductionQueue:
         project = self.repository.get(project_id)
         if not project:
             raise KeyError(project_id)
+        assets_pending = bool(project.get("assets_pending"))
         for field, label in (
             ("image_path", "数字人图片"),
             ("voice_path", "参考音频"),
             ("original_script", "口播稿"),
         ):
             value = project.get(field)
-            if not value or (field.endswith("_path") and not Path(value).is_file()):
+            if not value:
+                raise ValueError(f"缺少可用的{label}")
+            if (
+                field.endswith("_path")
+                and not Path(value).is_file()
+                and not assets_pending
+            ):
                 raise ValueError(f"缺少可用的{label}")
         if project.get("tts_engine") == "indextts2_voice_clone":
             emotion_voice = Path(project.get("emotion_voice_path") or "")
-            if not emotion_voice.is_file():
+            if not emotion_voice.is_file() and not assets_pending:
                 raise ValueError("IndexTTS2 音色与情感克隆版缺少可用的情感参考音频")
         if project.get("auto_run") is False:
             raise ValueError("项目未勾选全自动执行，请在项目详情中手动操作")
@@ -122,10 +129,49 @@ class ProductionQueue:
             frozen = {
                 key: value
                 for key, value in (task.get("snapshot") or {}).items()
-                if value is not None and key != "title"
+                if value is not None
+                and key
+                not in {
+                    "title",
+                    "image_path",
+                    "voice_path",
+                    "emotion_voice_path",
+                }
             }
             if frozen:
                 project = self.repository.update(project_id, **frozen)
+
+            while True:
+                project = self.repository.get(project_id)
+                if not project:
+                    raise FileNotFoundError("队列任务对应的项目不存在")
+                required_paths = [
+                    project.get("image_path"),
+                    project.get("voice_path"),
+                ]
+                if project.get("tts_engine") == "indextts2_voice_clone":
+                    required_paths.append(project.get("emotion_voice_path"))
+                if all(value and Path(value).is_file() for value in required_paths):
+                    if project.get("assets_pending"):
+                        project = self.repository.update(
+                            project_id, assets_pending=False
+                        )
+                    break
+                current_task = self.repository.get_task(task_id)
+                if not current_task or current_task["status"] == "CANCELLED":
+                    return
+                if current_task.get("stage") != "UPLOADING_ASSETS":
+                    self.repository.update_task(
+                        task_id, stage="UPLOADING_ASSETS", progress=1, error=None
+                    )
+                if project.get("status") != "UPLOADING_ASSETS":
+                    self.repository.update(
+                        project_id,
+                        status="UPLOADING_ASSETS",
+                        progress=1,
+                        error=None,
+                    )
+                await asyncio.sleep(0.25)
 
             analysis_attempt = 0
             while not project.get("script") or not project.get("image_analysis"):

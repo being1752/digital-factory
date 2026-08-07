@@ -250,9 +250,9 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
     image_path = input_dir / f"portrait{image_source.suffix or '.png'}"
     voice_path = input_dir / f"voice{voice_source.suffix or '.m4a'}"
     emotion_voice_path = input_dir / "emotion_voice.m4a"
-    if image_source.exists():
+    if image_source.exists() and not payload.expect_image_upload:
         shutil.copyfile(image_source, image_path)
-    if voice_source.exists():
+    if voice_source.exists() and not payload.expect_voice_upload:
         shutil.copyfile(voice_source, voice_path)
     return repository.create(
         {
@@ -264,6 +264,11 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
             "requested_style": payload.requested_style.strip(),
             "tts_engine": payload.tts_engine,
             "auto_run": payload.auto_run,
+            "assets_pending": bool(
+                payload.expect_image_upload
+                or payload.expect_voice_upload
+                or payload.expect_emotion_voice_upload
+            ),
             "project_dir": str(project_dir),
             "image_path": str(image_path),
             "voice_path": str(voice_path),

@@ -772,6 +772,83 @@ class CoreTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_auto_task_enters_queue_before_assets_finish_uploading(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repository = ProjectRepository(root / "jobs.db")
+                image = root / "job" / "input" / "portrait.png"
+                voice = root / "job" / "input" / "voice.m4a"
+                repository.create(
+                    {
+                        "id": "job",
+                        "title": "job",
+                        "original_script": "script",
+                        "image_path": str(image),
+                        "voice_path": str(voice),
+                        "auto_run": True,
+                        "assets_pending": True,
+                    }
+                )
+                calls: list[str] = []
+
+                class FakeRunner:
+                    async def analyze(self, project_id: str) -> None:
+                        calls.append("analyze")
+                        repository.update(
+                            project_id,
+                            script="script",
+                            image_analysis={"character": "test"},
+                        )
+
+                    async def generate_audio(self, project_id: str) -> None:
+                        calls.append("audio")
+                        output = root / "job" / "speech.flac"
+                        output.write_bytes(b"audio")
+                        repository.update(
+                            project_id,
+                            audio_path=str(output),
+                            segments=[{"index": 0}],
+                        )
+
+                    async def generate_video(self, project_id: str) -> None:
+                        calls.append("video")
+                        output = root / "job" / "final.mp4"
+                        output.write_bytes(b"video")
+                        repository.update(project_id, video_path=str(output))
+
+                queue = ProductionQueue(
+                    repository, FakeRunner()  # type: ignore[arg-type]
+                )
+                await queue.start()
+                try:
+                    task = queue.enqueue("job")
+                    for _ in range(100):
+                        waiting = repository.get_task(task["id"])
+                        if waiting and waiting["stage"] == "UPLOADING_ASSETS":
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertEqual(
+                        repository.get_task(task["id"])["stage"],
+                        "UPLOADING_ASSETS",
+                    )
+                    self.assertEqual(calls, [])
+                    image.parent.mkdir(parents=True)
+                    image.write_bytes(b"image")
+                    voice.write_bytes(b"voice")
+                    for _ in range(200):
+                        completed = repository.get_task(task["id"])
+                        if completed and completed["status"] == "COMPLETED":
+                            break
+                        await asyncio.sleep(0.01)
+                finally:
+                    await queue.stop()
+
+                self.assertEqual(calls, ["analyze", "audio", "video"])
+                self.assertFalse(repository.get("job")["assets_pending"])
+
+        asyncio.run(scenario())
+
     def test_delete_task_removes_project_and_its_files(self) -> None:
         from app import main
 
