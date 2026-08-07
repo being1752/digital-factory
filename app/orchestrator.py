@@ -66,6 +66,7 @@ class TaskRunner:
 
     async def analyze(self, project_id: str) -> None:
         project = self._project(project_id)
+        content_revision = int(project.get("content_revision") or 0)
         self.repository.update(project_id, status="ANALYZING_IMAGE", progress=5)
         result = await self.director.analyze_and_write(
             Path(project["image_path"]),
@@ -74,6 +75,9 @@ class TaskRunner:
             project.get("audience", ""),
             project.get("requested_style", ""),
         )
+        latest = self._project(project_id)
+        if int(latest.get("content_revision") or 0) != content_revision:
+            return
         plan_path = self._project_dir(project) / "plan" / "image_analysis.json"
         self._write_json(plan_path, result)
         self.repository.update(
@@ -93,6 +97,7 @@ class TaskRunner:
         if not project.get("script"):
             await self.analyze(project_id)
             project = self._project(project_id)
+        self.repository.update(project_id, audio_started=True)
         self.repository.update(project_id, status="UPLOADING_REFERENCE_AUDIO", progress=5)
         client = ComfyUIClient(self._comfy_url(), self.settings.comfy_timeout_seconds)
         remote_voice = await client.upload(
@@ -127,7 +132,9 @@ class TaskRunner:
         )
         self._write_json(workflow_path, workflow)
         self.repository.update(project_id, status="GENERATING_AUDIO", progress=15, seed=seed)
-        prompt_id, history = await client.run(workflow)
+        prompt_id = await client.submit(workflow)
+        self.repository.update(project_id, tts_prompt_id=prompt_id)
+        history = await client.wait(prompt_id)
         artifact = self._pick_artifact(
             client.artifacts(history), {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
         )
@@ -147,6 +154,26 @@ class TaskRunner:
             tts_engine=engine,
         )
         await self.align_audio(project_id)
+
+    async def cancel_project(self, project_id: str) -> None:
+        running = self.tasks.get(project_id)
+        if running and not running.done():
+            running.cancel()
+            try:
+                await running
+            except asyncio.CancelledError:
+                pass
+        project = self.repository.get(project_id)
+        if not project:
+            return
+        prompt_id = project.get("video_prompt_id") or project.get("tts_prompt_id")
+        if prompt_id:
+            try:
+                await ComfyUIClient(
+                    self._comfy_url(), self.settings.comfy_timeout_seconds
+                ).cancel(str(prompt_id))
+            except Exception:
+                pass
 
     async def align_audio(self, project_id: str) -> None:
         project = self._project(project_id)

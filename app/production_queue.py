@@ -16,6 +16,8 @@ class ProductionQueue:
         self.runner = runner
         self._wake = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
+        self._active_task_id: str | None = None
+        self._active_execution: asyncio.Task[None] | None = None
         self._stopping = False
         self.analysis_retry_seconds = 3.0
 
@@ -67,6 +69,29 @@ class ProductionQueue:
     def notify(self) -> None:
         self._wake.set()
 
+    async def cancel(self, task_id: str) -> dict[str, Any]:
+        task = self.repository.get_task(task_id)
+        if not task:
+            raise KeyError(task_id)
+        was_running = task["status"] == "RUNNING"
+        if task["status"] in {"QUEUED", "RUNNING"}:
+            task = self.repository.cancel_task(task_id)
+            if self._active_task_id == task_id and self._active_execution:
+                self._active_execution.cancel()
+                try:
+                    await self._active_execution
+                except asyncio.CancelledError:
+                    pass
+            if was_running:
+                await self.runner.cancel_project(task["project_id"])
+            project = self.repository.get(task["project_id"])
+            if project:
+                self.repository.update(
+                    task["project_id"], status="QUEUE_CANCELLED", progress=0
+                )
+        self._wake.set()
+        return self.repository.get_task(task_id) or task
+
     async def _run(self) -> None:
         while not self._stopping:
             self._wake.clear()
@@ -74,18 +99,30 @@ class ProductionQueue:
             if not task:
                 await self._wake.wait()
                 continue
-            await self._execute(task)
+            self._active_task_id = task["id"]
+            self._active_execution = asyncio.create_task(self._execute(task))
+            try:
+                await self._active_execution
+            except asyncio.CancelledError:
+                if self._stopping:
+                    raise
+            finally:
+                self._active_task_id = None
+                self._active_execution = None
 
     async def _execute(self, task: dict[str, Any]) -> None:
         task_id, project_id = task["id"], task["project_id"]
         try:
+            current_task = self.repository.get_task(task_id)
+            if not current_task or current_task["status"] == "CANCELLED":
+                return
             project = self.repository.get(project_id)
             if not project:
                 raise FileNotFoundError("队列任务对应的项目不存在")
             frozen = {
                 key: value
                 for key, value in (task.get("snapshot") or {}).items()
-                if value is not None
+                if value is not None and key != "title"
             }
             if frozen:
                 project = self.repository.update(project_id, **frozen)
@@ -140,6 +177,9 @@ class ProductionQueue:
                 and Path(project["audio_path"]).is_file()
                 and project.get("segments")
             )
+            current_task = self.repository.get_task(task_id)
+            if not current_task or current_task["status"] == "CANCELLED":
+                return
             if not audio_ready:
                 self.repository.update_task(
                     task_id, stage="GENERATING_AUDIO", progress=25, error=None
@@ -147,6 +187,9 @@ class ProductionQueue:
                 await self.runner.generate_audio(project_id)
                 project = self.repository.get(project_id) or project
 
+            current_task = self.repository.get_task(task_id)
+            if not current_task or current_task["status"] == "CANCELLED":
+                return
             video_ready = bool(
                 project.get("video_path") and Path(project["video_path"]).is_file()
             )
@@ -165,13 +208,15 @@ class ProductionQueue:
                 error=None,
             )
         except asyncio.CancelledError:
-            self.repository.update_task(
-                task_id,
-                status="QUEUED",
-                stage="RECOVERING",
-                progress=0,
-                error=None,
-            )
+            current = self.repository.get_task(task_id)
+            if current and current["status"] not in {"CANCELLED"}:
+                self.repository.update_task(
+                    task_id,
+                    status="QUEUED",
+                    stage="RECOVERING",
+                    progress=0,
+                    error=None,
+                )
             raise
         except Exception as exc:
             error = {"type": type(exc).__name__, "message": str(exc)}

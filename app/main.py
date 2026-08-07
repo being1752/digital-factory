@@ -23,6 +23,7 @@ from .schemas import (
     ComfyCheckRequest,
     ProjectCreate,
     ProjectPatch,
+    TaskPatch,
     TTS_ENGINES,
 )
 from .workflows import REQUIRED_VIDEO_NODES, WorkflowCompiler, required_tts_nodes
@@ -78,6 +79,7 @@ def public_project(project: dict[str, Any]) -> dict[str, Any]:
     result["has_emotion_voice"] = exists("emotion_voice_path")
     result["has_audio"] = exists("audio_path")
     result["has_video"] = exists("video_path")
+    result["can_edit_original_script"] = can_edit_project_script(project)
     return result
 
 
@@ -119,6 +121,9 @@ def public_task(task: dict[str, Any], queue_position: int | None = None) -> dict
     result.update(task_display_state(task, project))
     if project:
         result["project_title"] = project.get("title", task.get("project_title", ""))
+        result["original_script"] = project.get(
+            "original_script", (task.get("snapshot") or {}).get("original_script", "")
+        )
         result["project_status"] = project.get("status", "")
         result["project_progress"] = project.get("progress", 0)
         result["display_progress"] = project.get("progress", task.get("progress", 0))
@@ -128,11 +133,56 @@ def public_task(task: dict[str, Any], queue_position: int | None = None) -> dict
         result["has_video"] = bool(
             project.get("video_path") and Path(project["video_path"]).is_file()
         )
+        result["has_image"] = bool(
+            project.get("image_path") and Path(project["image_path"]).is_file()
+        )
+        result["portrait_url"] = f"/api/projects/{task['project_id']}/files/image"
+        result["can_edit_script"] = can_edit_task_script(task, project)
     else:
         result["display_progress"] = task.get("progress", 0)
+        result["original_script"] = (task.get("snapshot") or {}).get(
+            "original_script", ""
+        )
+        result["has_image"] = False
+        result["can_edit_script"] = False
+    result["can_edit_title"] = bool(project)
+    result["can_delete"] = True
     if queue_position is not None:
         result["queue_position"] = queue_position
     return result
+
+
+AUDIO_LOCKED_TASK_STAGES = {
+    "GENERATING_AUDIO",
+    "GENERATING_VIDEO",
+    "COMPLETED",
+}
+AUDIO_LOCKED_PROJECT_STATUSES = {
+    "UPLOADING_REFERENCE_AUDIO",
+    "GENERATING_AUDIO",
+    "ALIGNING_SPEECH",
+    "PLANNING_ACTIONS",
+    "PLAN_READY",
+    "UPLOADING_VIDEO_ASSETS",
+    "GENERATING_VIDEO",
+    "COMPLETED",
+}
+
+
+def can_edit_task_script(
+    task: dict[str, Any], project: dict[str, Any] | None
+) -> bool:
+    if not project:
+        return False
+    if task.get("stage") in AUDIO_LOCKED_TASK_STAGES:
+        return False
+    return can_edit_project_script(project)
+
+
+def can_edit_project_script(project: dict[str, Any]) -> bool:
+    if project.get("audio_started") or project.get("audio_path"):
+        return False
+    return project.get("status") not in AUDIO_LOCKED_PROJECT_STATUSES
 
 
 def get_project(project_id: str) -> dict[str, Any]:
@@ -224,6 +274,8 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
             ),
             "status": "CREATED",
             "progress": 0,
+            "content_revision": 0,
+            "audio_started": False,
             "error": None,
             "script": "",
             "emotion": {},
@@ -351,6 +403,8 @@ async def create_project(
             ),
             "status": "CREATED",
             "progress": 0,
+            "content_revision": 0,
+            "audio_started": False,
             "error": None,
             "script": "",
             "emotion": {},
@@ -416,7 +470,11 @@ async def enqueue_project(project_id: str) -> dict[str, Any]:
 
 @app.get("/api/tasks")
 async def list_production_tasks(limit: int = 100) -> list[dict[str, Any]]:
-    tasks = repository.list_tasks(max(1, min(limit, 500)))
+    tasks = [
+        task
+        for task in repository.list_tasks(max(1, min(limit, 500)))
+        if task["status"] != "COMPLETED"
+    ]
     queued_ids = [
         task["id"] for task in tasks if task["status"] == "QUEUED"
     ]
@@ -441,7 +499,7 @@ async def production_task_detail(task_id: str) -> dict[str, Any]:
 @app.post("/api/tasks/{task_id}/cancel")
 async def cancel_production_task(task_id: str) -> dict[str, Any]:
     try:
-        task = repository.cancel_task(task_id)
+        task = await production_queue.cancel(task_id)
     except KeyError as exc:
         raise HTTPException(404, "任务不存在") from exc
     except ValueError as exc:
@@ -451,6 +509,63 @@ async def cancel_production_task(task_id: str) -> dict[str, Any]:
         repository.update(
             task["project_id"], status="QUEUE_CANCELLED", progress=0
         )
+    return public_task(task)
+
+
+@app.patch("/api/tasks/{task_id}")
+async def patch_production_task(
+    task_id: str, patch: TaskPatch
+) -> dict[str, Any]:
+    task = repository.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "任务不存在")
+    project = repository.get(task["project_id"])
+    if not project:
+        raise HTTPException(404, "任务对应的项目不存在")
+    changes = patch.model_dump(exclude_none=True)
+    task_payload_changes: dict[str, Any] = {}
+    project_changes: dict[str, Any] = {}
+    if "title" in changes:
+        title = changes["title"].strip()
+        if not title:
+            raise HTTPException(422, "任务名称不能为空")
+        project_changes["title"] = title
+        task_payload_changes["title"] = title
+    if "original_script" in changes:
+        original_script = changes["original_script"].strip()
+        if not original_script:
+            raise HTTPException(422, "口播稿不能为空")
+        if not can_edit_task_script(task, project):
+            raise HTTPException(409, "音频已经开始生成，口播稿不可修改")
+        if original_script != project.get("original_script", "").strip():
+            project_changes.update(
+                {
+                    "original_script": original_script,
+                    "content_revision": int(project.get("content_revision") or 0) + 1,
+                    "script": "",
+                    "style": "",
+                    "emotion": {},
+                    "segments": [],
+                    "alignment": None,
+                    "audio_path": None,
+                    "audio_duration": None,
+                    "video_path": None,
+                    "status": (
+                        "ANALYZING_IMAGE"
+                        if task.get("status") == "RUNNING"
+                        else "QUEUE_WAITING"
+                        if task.get("status") == "QUEUED"
+                        else "CREATED"
+                    ),
+                    "progress": 5 if task.get("status") == "RUNNING" else 0,
+                    "error": None,
+                }
+            )
+            task_payload_changes["original_script"] = original_script
+    if project_changes:
+        project = repository.update(task["project_id"], **project_changes)
+    if task_payload_changes:
+        task = repository.update_task_payload(task_id, **task_payload_changes)
     return public_task(task)
 
 
@@ -479,16 +594,38 @@ async def retry_production_task(task_id: str) -> dict[str, Any]:
 
 @app.delete("/api/tasks/{task_id}")
 async def delete_production_task(task_id: str) -> dict[str, Any]:
+    existing = repository.get_task(task_id)
+    if not existing:
+        raise HTTPException(404, "任务不存在")
+    project_id = existing["project_id"]
     try:
-        task = repository.delete_task(task_id)
+        for active in repository.active_tasks_for_project(project_id):
+            await production_queue.cancel(active["id"])
+        manual_run = runner.tasks.get(project_id)
+        if manual_run and not manual_run.done():
+            await runner.cancel_project(project_id)
     except KeyError as exc:
         raise HTTPException(404, "任务不存在") from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+    project = repository.get(project_id)
+    files_removed = False
+    if project:
+        project_dir = safe_project_directory(project)
+        if project_dir.exists():
+            if not project_dir.is_dir():
+                raise HTTPException(409, "项目路径不是目录，已拒绝删除")
+            shutil.rmtree(project_dir)
+            files_removed = True
+        repository.delete(project_id)
+    repository.delete_tasks_for_project(project_id)
+    runner.tasks.pop(project_id, None)
     return {
         "id": task_id,
-        "project_id": task["project_id"],
+        "project_id": project_id,
         "deleted": True,
+        "project_deleted": bool(project),
+        "files_removed": files_removed,
     }
 
 
@@ -496,6 +633,51 @@ async def delete_production_task(task_id: str) -> dict[str, Any]:
 async def patch_project(project_id: str, patch: ProjectPatch) -> dict[str, Any]:
     project = get_project(project_id)
     changes = patch.model_dump(exclude_none=True)
+    active_tasks = repository.active_tasks_for_project(project_id)
+    active_task = active_tasks[0] if active_tasks else None
+    original_script_changed = False
+    if "original_script" in changes:
+        original_script = changes["original_script"].strip()
+        if not original_script:
+            raise HTTPException(422, "口播稿不能为空")
+        editable = (
+            can_edit_task_script(active_task, project)
+            if active_task
+            else can_edit_project_script(project)
+        )
+        if not editable:
+            raise HTTPException(409, "音频已经开始生成，口播稿不可修改")
+        original_script_changed = (
+            original_script != project.get("original_script", "").strip()
+        )
+        changes["original_script"] = original_script
+        if original_script_changed:
+            changes.update(
+                {
+                    "content_revision": int(project.get("content_revision") or 0) + 1,
+                    "script": "",
+                    "style": "",
+                    "emotion": {},
+                    "segments": [],
+                    "alignment": None,
+                    "audio_path": None,
+                    "audio_duration": None,
+                    "video_path": None,
+                    "status": (
+                        "ANALYZING_IMAGE"
+                        if active_task and active_task["status"] == "RUNNING"
+                        else "QUEUE_WAITING"
+                        if active_task and active_task["status"] == "QUEUED"
+                        else "CREATED"
+                    ),
+                    "progress": (
+                        5
+                        if active_task and active_task["status"] == "RUNNING"
+                        else 0
+                    ),
+                    "error": None,
+                }
+            )
     if "emotion" in changes:
         changes["emotion"] = patch.emotion.model_dump() if patch.emotion else {}
     if "segments" in changes:
@@ -509,7 +691,9 @@ async def patch_project(project_id: str, patch: ProjectPatch) -> dict[str, Any]:
         "script" in changes
         and changes["script"].strip() != project.get("script", "").strip()
     )
-    if script_changed or engine_changed:
+    if original_script_changed:
+        pass
+    elif script_changed or engine_changed:
         changes.update(
             {
                 "audio_path": None,
@@ -522,7 +706,12 @@ async def patch_project(project_id: str, patch: ProjectPatch) -> dict[str, Any]:
         )
     elif "segments" in changes:
         changes.update({"video_path": None, "status": "PLAN_READY", "progress": 100})
-    return public_project(repository.update(project_id, **changes))
+    updated = repository.update(project_id, **changes)
+    if original_script_changed and active_task:
+        repository.update_task_payload(
+            active_task["id"], original_script=changes["original_script"]
+        )
+    return public_project(updated)
 
 
 @app.post("/api/projects/{project_id}/assets/{kind}")

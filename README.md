@@ -20,7 +20,9 @@ FastAPI 后端服务，将 AI 导演、IndexTTS2 情绪语音和 InfiniteTalk �
 - 在线编辑文案、情绪和每段动作；
 - SQLite 任务记录、过程文件留档、音频试听和视频下载。
 - 新建项目可选择手动模式或全自动模式；全自动任务进入 SQLite 持久化 FIFO 队列，AI 导演失败后每 3 秒持续重试，成功后自动完成音频、对齐和视频；重试期间可取消释放队列。
+- 左侧队列仅展示等待、运行、失败和取消任务；完成后自动移出队列并保留在最近项目。右侧项目区从提交起即可查看数字人图片和原始口播稿，名称随时可改，音频开始前可改口播稿。
 - 音频生成可按任务选择 IndexTTS2 基础情感版（`indextts2-basic_emo_api.json`）或 IndexTTS2 音色与情感克隆版（`indextts2-voice-clone_api.json`）；两套 API 模板互不影响。
+- 视频生成使用 InfiniteTalk 单人跑火车 API 母版（`infinitetalk-single-person-train_api.json`）。
 
 ## 启动
 

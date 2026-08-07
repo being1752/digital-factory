@@ -79,6 +79,16 @@ class ComfyUIClient:
         history = await self.wait(prompt_id)
         return prompt_id, history
 
+    async def cancel(self, prompt_id: str | None = None) -> None:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(f"{self.base_url}/interrupt")
+            response.raise_for_status()
+            if prompt_id:
+                response = await client.post(
+                    f"{self.base_url}/queue", json={"delete": [prompt_id]}
+                )
+                response.raise_for_status()
+
     async def wait(self, prompt_id: str) -> dict[str, Any]:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.timeout_seconds

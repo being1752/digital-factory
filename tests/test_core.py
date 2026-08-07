@@ -140,7 +140,7 @@ class CoreTests(unittest.TestCase):
         self._assert_references_exist(workflow)
 
     def test_six_car_graph_matches_verified_workflow_one(self) -> None:
-        template_path = ROOT / "YZ金鱼-单人InfiniteTalk官方版工作流1.json"
+        template_path = ROOT / "infinitetalk-single-person-train_api.json"
         template = json.loads(template_path.read_text(encoding="utf-8"))
         segments = [
             {
@@ -181,7 +181,7 @@ class CoreTests(unittest.TestCase):
             "uploaded_portrait.png", "uploaded_speech.flac", segments, 42
         )
         template = json.loads(
-            (ROOT / "YZ金鱼-单人InfiniteTalk官方版工作流1.json").read_text(
+            (ROOT / "infinitetalk-single-person-train_api.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -519,6 +519,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("/api/tasks", schema["paths"])
         self.assertIn("/api/tasks/{task_id}/cancel", schema["paths"])
         self.assertIn("/api/tasks/{task_id}/retry", schema["paths"])
+        self.assertIn("patch", schema["paths"]["/api/tasks/{task_id}"])
         self.assertIn("delete", schema["paths"]["/api/tasks/{task_id}"])
         response = TestClient(app).options(
             "/api/health",
@@ -561,6 +562,67 @@ class CoreTests(unittest.TestCase):
         display = task_display_state(task, project)
         self.assertEqual(display["display_status"], "ERROR")
         self.assertEqual(display["status_source"], "queue")
+
+    def test_original_script_locks_when_audio_generation_starts(self) -> None:
+        from app.main import can_edit_task_script
+
+        task = {"stage": "ANALYZING", "status": "RUNNING"}
+        project = {"status": "ANALYZING_IMAGE", "audio_started": False}
+        self.assertTrue(can_edit_task_script(task, project))
+        project["audio_started"] = True
+        self.assertFalse(can_edit_task_script(task, project))
+
+    def test_completed_tasks_are_hidden_from_queue_api(self) -> None:
+        from app import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            repository = ProjectRepository(Path(directory) / "jobs.db")
+            completed = repository.enqueue_task("done", {"title": "done"})
+            repository.update_task(
+                completed["id"], status="COMPLETED", stage="COMPLETED"
+            )
+            failed = repository.enqueue_task("failed", {"title": "failed"})
+            repository.update_task(
+                failed["id"], status="FAILED", stage="FAILED"
+            )
+            with patch.object(main, "repository", repository):
+                tasks = asyncio.run(main.list_production_tasks())
+            self.assertEqual([task["id"] for task in tasks], [failed["id"]])
+
+    def test_project_original_script_edit_updates_active_queue_snapshot(self) -> None:
+        from app import main
+        from app.schemas import ProjectPatch
+
+        with tempfile.TemporaryDirectory() as directory:
+            repository = ProjectRepository(Path(directory) / "jobs.db")
+            repository.create(
+                {
+                    "id": "job",
+                    "title": "job",
+                    "original_script": "旧稿",
+                    "script": "旧导演稿",
+                    "status": "SCRIPT_READY",
+                    "audio_started": False,
+                    "content_revision": 0,
+                }
+            )
+            task = repository.enqueue_task(
+                "job", {"title": "job", "original_script": "旧稿"}
+            )
+            with patch.object(main, "repository", repository):
+                updated = asyncio.run(
+                    main.patch_project(
+                        "job", ProjectPatch(original_script="新口播稿")
+                    )
+                )
+            self.assertEqual(updated["original_script"], "新口播稿")
+            self.assertEqual(updated["script"], "")
+            self.assertEqual(updated["status"], "QUEUE_WAITING")
+            self.assertEqual(updated["content_revision"], 1)
+            self.assertEqual(
+                repository.get_task(task["id"])["snapshot"]["original_script"],
+                "新口播稿",
+            )
 
     def test_default_project_payload_can_declare_pending_asset_uploads(self) -> None:
         payload = ProjectCreate(
@@ -629,6 +691,129 @@ class CoreTests(unittest.TestCase):
             deleted = repository.delete_task(queued["id"])
             self.assertEqual(deleted["status"], "FAILED")
             self.assertIsNone(repository.get_task(queued["id"]))
+
+    def test_task_payload_edits_keep_queue_snapshot_in_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = ProjectRepository(Path(directory) / "jobs.db")
+            queued = repository.enqueue_task(
+                "project",
+                {"title": "旧名称", "original_script": "旧口播稿"},
+            )
+            updated = repository.update_task_payload(
+                queued["id"], title="新名称", original_script="新口播稿"
+            )
+            self.assertEqual(updated["project_title"], "新名称")
+            self.assertEqual(updated["snapshot"]["title"], "新名称")
+            self.assertEqual(updated["snapshot"]["original_script"], "新口播稿")
+
+    def test_running_audio_task_can_be_cancelled_before_deletion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = ProjectRepository(Path(directory) / "jobs.db")
+            queued = repository.enqueue_task("project", {"title": "project"})
+            repository.claim_next_task()
+            repository.update_task(queued["id"], stage="GENERATING_AUDIO")
+            cancelled = repository.cancel_task(queued["id"])
+            self.assertEqual(cancelled["status"], "CANCELLED")
+            deleted = repository.delete_task(queued["id"])
+            self.assertEqual(deleted["stage"], "CANCELLED")
+
+    def test_queue_cancels_active_execution_and_keeps_worker_alive(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repository = ProjectRepository(root / "jobs.db")
+                input_dir = root / "job" / "input"
+                input_dir.mkdir(parents=True)
+                image = input_dir / "portrait.png"
+                voice = input_dir / "voice.m4a"
+                image.write_bytes(b"image")
+                voice.write_bytes(b"voice")
+                repository.create(
+                    {
+                        "id": "job",
+                        "title": "job",
+                        "original_script": "script",
+                        "script": "script",
+                        "image_analysis": {"character": "test"},
+                        "image_path": str(image),
+                        "voice_path": str(voice),
+                        "auto_run": True,
+                    }
+                )
+                started = asyncio.Event()
+                remote_cancelled = False
+
+                class BlockingRunner:
+                    async def generate_audio(self, project_id: str) -> None:
+                        started.set()
+                        await asyncio.Event().wait()
+
+                    async def generate_video(self, project_id: str) -> None:
+                        raise AssertionError("cancelled task must not generate video")
+
+                    async def cancel_project(self, project_id: str) -> None:
+                        nonlocal remote_cancelled
+                        remote_cancelled = True
+
+                queue = ProductionQueue(
+                    repository, BlockingRunner()  # type: ignore[arg-type]
+                )
+                await queue.start()
+                try:
+                    task = queue.enqueue("job")
+                    await asyncio.wait_for(started.wait(), timeout=1)
+                    cancelled = await queue.cancel(task["id"])
+                    self.assertEqual(cancelled["status"], "CANCELLED")
+                    self.assertTrue(remote_cancelled)
+                    self.assertIsNotNone(queue._worker)
+                    self.assertFalse(queue._worker.done())
+                finally:
+                    await queue.stop()
+
+        asyncio.run(scenario())
+
+    def test_delete_task_removes_project_and_its_files(self) -> None:
+        from app import main
+
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                data_dir = Path(directory)
+                project_dir = data_dir / "jobs" / "job"
+                project_dir.mkdir(parents=True)
+                (project_dir / "result.txt").write_text("result", encoding="utf-8")
+                repository = ProjectRepository(data_dir / "jobs.db")
+                repository.create(
+                    {
+                        "id": "job",
+                        "title": "job",
+                        "project_dir": str(project_dir),
+                    }
+                )
+                task = repository.enqueue_task("job", {"title": "job"})
+
+                class FakeQueue:
+                    async def cancel(self, task_id: str):
+                        return repository.cancel_task(task_id)
+
+                class FakeRunner:
+                    tasks = {}
+
+                configured = replace(settings, data_dir=data_dir)
+                with (
+                    patch.object(main, "repository", repository),
+                    patch.object(main, "production_queue", FakeQueue()),
+                    patch.object(main, "runner", FakeRunner()),
+                    patch.object(main, "settings", configured),
+                ):
+                    result = await main.delete_production_task(task["id"])
+
+                self.assertTrue(result["project_deleted"])
+                self.assertTrue(result["files_removed"])
+                self.assertFalse(project_dir.exists())
+                self.assertIsNone(repository.get("job"))
+                self.assertIsNone(repository.get_task(task["id"]))
+
+        asyncio.run(scenario())
 
     def test_running_director_retry_can_be_cancelled(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -819,7 +1004,7 @@ class CoreTests(unittest.TestCase):
                 }
 
         locked_script = "Company facts 5 years. Keep every word and number."
-        image_path = next(ROOT.glob("*.png"))
+        image_path = next((ROOT / "material").glob("*.png"))
         result = asyncio.run(
             RewritingModelDirector(configured).analyze_and_write(
                 image_path, locked_script, "promotion", "audience", "professional"

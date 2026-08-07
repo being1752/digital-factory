@@ -133,7 +133,7 @@ class WorkflowCompiler:
         if not validated:
             raise ValueError("至少需要一个视频动作段")
 
-        verified_train = self.root / "YZ金鱼-单人InfiniteTalk官方版工作流1.json"
+        verified_train = self.root / "infinitetalk-single-person-train_api.json"
         if not verified_train.exists():
             raise FileNotFoundError(f"缺少已验证的视频母版：{verified_train}")
         return self._compile_verified_train(

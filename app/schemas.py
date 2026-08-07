@@ -57,10 +57,16 @@ class Segment(BaseModel):
 
 class ProjectPatch(BaseModel):
     script: str | None = None
+    original_script: str | None = None
     emotion: EmotionVector | None = None
     segments: list[Segment] | None = None
     title: str | None = None
     tts_engine: TTSEngine | None = None
+
+
+class TaskPatch(BaseModel):
+    title: str | None = Field(default=None, max_length=100)
+    original_script: str | None = None
 
 
 class ComfyCheckRequest(BaseModel):

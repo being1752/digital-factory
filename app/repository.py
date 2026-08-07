@@ -301,6 +301,33 @@ class ProjectRepository:
             raise KeyError(task_id)
         return task
 
+    def update_task_payload(self, task_id: str, **changes: Any) -> dict[str, Any]:
+        with self.lock, self._connect() as db:
+            row = db.execute(
+                "SELECT payload FROM production_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if not row:
+                raise KeyError(task_id)
+            payload = json.loads(row["payload"])
+            snapshot = payload.setdefault("snapshot", {})
+            if "title" in changes:
+                payload["project_title"] = changes["title"]
+                snapshot["title"] = changes["title"]
+            if "original_script" in changes:
+                snapshot["original_script"] = changes["original_script"]
+            timestamp = now_iso()
+            db.execute(
+                """
+                UPDATE production_tasks SET payload = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (json.dumps(payload, ensure_ascii=False), timestamp, task_id),
+            )
+        task = self.get_task(task_id)
+        if not task:
+            raise KeyError(task_id)
+        return task
+
     def recover_running_tasks(self) -> int:
         timestamp = now_iso()
         with self.lock, self._connect() as db:
@@ -319,12 +346,8 @@ class ProjectRepository:
         task = self.get_task(task_id)
         if not task:
             raise KeyError(task_id)
-        cancellable = task["status"] == "QUEUED" or (
-            task["status"] == "RUNNING"
-            and task["stage"] in {"ANALYZING", "ANALYSIS_RETRYING"}
-        )
-        if not cancellable:
-            raise ValueError("只能取消等待中的任务或正在重试的 AI 导演任务")
+        if task["status"] not in {"QUEUED", "RUNNING"}:
+            raise ValueError("只有等待中或正在执行的任务可以取消")
         return self.update_task(
             task_id,
             status="CANCELLED",
