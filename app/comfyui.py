@@ -30,19 +30,32 @@ class ComfyUIClient:
 
     async def check(self, required_nodes: Iterable[str] = ()) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=20) as client:
-            stats_response, nodes_response = await asyncio.gather(
-                client.get(f"{self.base_url}/system_stats"),
-                client.get(f"{self.base_url}/object_info"),
-            )
+            stats_response = await client.get(f"{self.base_url}/system_stats")
             stats_response.raise_for_status()
-            nodes_response.raise_for_status()
+            system_stats = stats_response.json()
+            try:
+                nodes_response = await client.get(
+                    f"{self.base_url}/object_info", timeout=60
+                )
+                nodes_response.raise_for_status()
+            except httpx.TimeoutException:
+                return {
+                    "available": True,
+                    "node_check_complete": False,
+                    "missing_nodes": [],
+                    "system_stats": system_stats,
+                    "node_count": None,
+                    "warning": "ComfyUI 已连接，但节点清单响应超过 60 秒，暂未完成节点兼容性检查。",
+                }
         object_info = nodes_response.json()
         missing = sorted(set(required_nodes) - set(object_info))
         return {
             "available": not missing,
+            "node_check_complete": True,
             "missing_nodes": missing,
-            "system_stats": stats_response.json(),
+            "system_stats": system_stats,
             "node_count": len(object_info),
+            "warning": None,
         }
 
     async def upload(self, path: Path, remote_name: str) -> str:

@@ -173,9 +173,11 @@ export default {
       if(!value){this.comfyCheckOk=false;this.comfyCheckResult='请先填写或粘贴完整的 ComfyUI URL';return}
       this.comfyChecking=true;this.comfyCheckOk=false;this.comfyCheckResult=`正在通过后端 ${getApiBase()} 检测 ${value} …`
       try{
-        const result=await request('/api/comfyui/check',{method:'POST',data:{url:value,tts_engine:ttsEngine||'indextts2_legacy'},timeout:45000})
+        const result=await request('/api/comfyui/check',{method:'POST',data:{url:value,tts_engine:ttsEngine||'indextts2_legacy'},timeout:75000})
         this.comfyCheckOk=Boolean(result.available)
-        this.comfyCheckResult=result.available?`连接正常，发现 ${result.node_count} 个节点。`:`连接成功，但缺少 ${result.missing_nodes.length} 个节点：${result.missing_nodes.join('、')}`
+        this.comfyCheckResult=result.node_check_complete===false
+          ?(result.warning||'ComfyUI 已连接，但节点兼容性检查超时。')
+          :(result.available?`连接正常，发现 ${result.node_count} 个节点。`:`连接成功，但缺少 ${result.missing_nodes.length} 个节点：${result.missing_nodes.join('、')}`)
       }catch(error){this.comfyCheckOk=false;this.comfyCheckResult=`检测失败：${error.message}`}
       finally{this.comfyChecking=false}
     },

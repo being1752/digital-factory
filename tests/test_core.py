@@ -210,7 +210,7 @@ class CoreTests(unittest.TestCase):
         prompt = AIDirector._action_prompt(
             "第1段：她对着前方说话，手部自然摆动，\n轻微皱眉，露出可爱的表情"
         )
-        self.assertEqual(prompt, "她对着前方说话，手部自然摆动，轻微皱眉，露出可爱的表情。")
+        self.assertEqual(prompt, "人物对着镜头说话，手部自然摆动，轻微皱眉，露出可爱的表情。")
         segments = [
             {
                 "index": 0,
@@ -224,16 +224,27 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(workflow["254"]["inputs"]["text"], prompt)
         self.assertNotIn("\n", workflow["254"]["inputs"]["text"])
 
-    def test_long_director_prompt_is_compacted_for_infinite_talk(self) -> None:
+    def test_approved_action_prompt_is_not_rewritten_before_infinite_talk(self) -> None:
         long_prompt = (
             "她对着前方说话，说到‘万亿级蓝海机遇’时身体微微后靠，同时右手展开"
             "掌心向上向外划小弧表示市场广阔，随后缓缓收回，眼神坚定充满信心。"
         )
         compact = self.compiler.compact_action_prompt(long_prompt)
-        self.assertTrue(compact.startswith("她对着前方说话，"))
-        self.assertLessEqual(len(compact), 36)
-        self.assertNotIn("万亿级蓝海机遇", compact)
-        self.assertNotIn("随后", compact)
+        self.assertTrue(compact.startswith("人物对着镜头说话，"))
+        self.assertIn("万亿级蓝海机遇", compact)
+        self.assertIn("随后", compact)
+
+    def test_duplicate_speaking_prefix_is_cleaned(self) -> None:
+        prompt = self.compiler.compact_action_prompt(
+            "她对着镜头说话。她对着镜头说话，手部自然摆动，表情俏皮。"
+        )
+        self.assertEqual(prompt, "人物对着镜头说话，手部自然摆动，表情俏皮。")
+
+    def test_male_speaking_prefix_is_normalized_without_gender_assumption(self) -> None:
+        prompt = self.compiler.compact_action_prompt(
+            "他对着镜头说话，轻微点头，表情认真。"
+        )
+        self.assertEqual(prompt, "人物对着镜头说话，轻微点头，表情认真。")
 
     def test_comfy_upload_uses_regular_file_context(self) -> None:
         class Response:

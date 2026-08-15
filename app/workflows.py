@@ -282,33 +282,15 @@ class WorkflowCompiler:
 
     @staticmethod
     def compact_action_prompt(value: str, max_length: int = 36) -> str:
-        """Keep InfiniteTalk conditioning short and stable for every train car."""
+        """Clean a prompt without rewriting the user's approved direction."""
         prompt = re.sub(r"\s+", " ", str(value or "")).strip().strip('"“”')
-        prompt = re.sub(
-            r"(?:说到|说|在|随着)?\s*[‘“][^’”]+[’”]\s*(?:时|处)?",
-            "",
-            prompt,
-        )
-        prompt = prompt.replace("她对着前方说话。她对着前方说话", "她对着前方说话")
-        prefix = "她对着前方说话"
-        if prompt.startswith(prefix):
-            prompt = prompt[len(prefix) :].lstrip("，。；; ")
-        clauses = [part.strip() for part in re.split(r"[，。；;]+", prompt) if part.strip()]
-        selected: list[str] = []
-        for clause in clauses:
-            clause = re.split(r"(?:随后|然后|再|句末|收尾)", clause, maxsplit=1)[0].strip()
-            clause = re.split(r"(?:表示|传达|仿佛|以强调)", clause, maxsplit=1)[0].strip()
-            if not clause:
-                continue
-            candidate = prefix + "，" + "，".join(selected + [clause]) + "。"
-            if len(candidate) > max_length:
-                continue
-            selected.append(clause)
-            if len(selected) >= 3:
-                break
-        if not selected:
-            selected = ["手部自然摆动", "表情自然"]
-        return prefix + "，" + "，".join(selected) + "。"
+        prompt = re.sub(r"(?:她|他|人物)对着(?:前方|镜头)说话", "人物对着镜头说话", prompt)
+        prompt = re.sub(r"^(?:人物对着镜头说话[。；;，, ]*){2,}", "人物对着镜头说话，", prompt)
+        if not prompt:
+            return "人物对着镜头说话。"
+        if not prompt.startswith("人物对着镜头说话"):
+            prompt = "人物对着镜头说话，" + prompt.lstrip("，。；;,. ")
+        return prompt.rstrip("。") + "。"
 
     @staticmethod
     def expected_segment_count(duration: float) -> int:

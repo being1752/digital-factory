@@ -196,11 +196,15 @@ Before planning each window, determine its semantic role in the complete script,
 窗口：{json.dumps(compact, ensure_ascii=False)}
 
 只输出 JSON：{{"segments": [...]}}。每段必须含 index、start_state、end_state、action_prompt、motion_strength。
-action_prompt 是可直接交给 InfiniteTalk 当前视频窗口的中文提示词，必须是一行，不得换行，不要编号，不要解释设计理由。
-每行以“她对着前方说话”开头，随后用自然中文描述这一窗口中符合当前图片姿势的手部、头部、眼神和表情动作，例如：
-“她对着前方说话，手部自然摆动，轻微皱眉，露出可爱的表情。”
-每行控制在20到45个汉字，最多写一个自然动作和一个表情；不要引用正在说的台词，不要写“说到某词时”、秒数、先后步骤或动作设计理由。
-动作丰富度由当前口播语义和图片可见动作空间决定，不要机械限制手部动作，也不要为了变化而加入与原姿势无法衔接的动作。
+action_prompt 是直接交给 InfiniteTalk 当前视频窗口的中文提示词，必须是一行，不得换行，不要编号，不要解释设计理由。
+InfiniteTalk 更容易执行短、直接、宽泛的动作和表情，不擅长精确控制左右手、手指、桌面位置或一连串动作。
+每行必须以“人物对着镜头说话”开头。允许只写“人物对着镜头说话。”；需要表演变化时，最多添加一个宽泛动作和一个清晰表情，例如：
+“人物对着镜头说话，手部自然摆动，轻微皱眉，露出可爱的表情。”
+“人物对着镜头说话，手部自然摆动，表情俏皮。”
+“人物对着镜头说话，轻微点头，表情认真。”
+每行控制在8到30个汉字。优先使用手部自然摆动、轻微点头、轻微侧头、身体轻微前倾等宽泛动作，以及俏皮、可爱、认真、疑惑、开心、温柔、轻微皱眉等明确表情。
+禁止指定左手、右手、食指、掌心、桌面、键盘、心口等精确部位或空间位置；禁止在一行安排多个连续动作。
+动作和表情由当前口播语义决定，不要机械轮换，也不要为了变化强行增加动作。
 相邻窗口必须保持视频流连续；可以延续同一动作，也可以在语义变化时自然过渡，不要求每节都换动作。
 starts_mid_sentence=true 表示开头正在承接上一窗口的同一句话，不能在窗口边界突然启动新动作或更换情绪；
 ends_mid_sentence=true 表示句子还会进入下一窗口，结束姿态应当可自然延续。speech_events 中的 local_start/local_end
@@ -286,8 +290,10 @@ ends_mid_sentence=true 表示句子还会进入下一窗口，结束姿态应当
         prompt = re.sub(r"\s+", " ", str(value or "")).strip().strip('"“”')
         prompt = re.sub(r"([，。！？；：])\s+", r"\1", prompt)
         prompt = re.sub(r"^(?:第\s*\d+\s*(?:段|节)?[：:、.-]?\s*)", "", prompt)
-        if not prompt.startswith("她对着前方说话"):
-            prompt = f"她对着前方说话，{prompt.lstrip('，。 ')}"
+        prompt = re.sub(r"(?:她|他|人物)对着(?:前方|镜头)说话", "人物对着镜头说话", prompt)
+        prompt = re.sub(r"^(?:人物对着镜头说话[。；;，, ]*){2,}", "人物对着镜头说话，", prompt)
+        if not prompt.startswith("人物对着镜头说话"):
+            prompt = f"人物对着镜头说话，{prompt.lstrip('，。 ')}"
         return prompt.rstrip("。") + "。"
 
     @staticmethod
@@ -370,7 +376,7 @@ ends_mid_sentence=true 表示句子还会进入下一窗口，结束姿态应当
                     start=round(index * 4.0, 3),
                     end=round(min(duration, (index + 1) * 4.0), 3),
                     spoken_text=spoken,
-                    action_prompt=AIDirector._action_prompt(f"她对着前方说话，{action}"),
+                    action_prompt=AIDirector._action_prompt(f"人物对着镜头说话，{action}"),
                     start_state=state,
                     end_state=end_state,
                     motion_strength=strength,
