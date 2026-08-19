@@ -15,8 +15,10 @@ from app.audio import audio_duration
 from app.config import settings
 from app.comfyui import ComfyUIClient
 from app.production_queue import ProductionQueue
+from app.postproduction import BackgroundMusicMixer
 from app.repository import ProjectRepository
 from app.schemas import ProjectCreate
+from app.subtitles import SubtitleDocument
 from app.workflows import TRAIN_VIDEO_OUTPUT_IDS, WorkflowCompiler
 
 
@@ -96,6 +98,42 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(legacy.auto_run)
         self.assertTrue(clone.auto_run)
         self.assertTrue(clone.expect_emotion_voice_upload)
+
+    def test_project_create_accepts_background_music_settings(self) -> None:
+        project = ProjectCreate(
+            original_script="测试",
+            bgm_enabled=True,
+            bgm_volume=0.32,
+            bgm_ducking=True,
+            bgm_fade_in=1.2,
+            bgm_fade_out=2.5,
+            expect_bgm_upload=True,
+        )
+        self.assertTrue(project.bgm_enabled)
+        self.assertAlmostEqual(project.bgm_volume, 0.32)
+        self.assertTrue(project.bgm_ducking)
+        self.assertTrue(project.expect_bgm_upload)
+
+    def test_background_music_command_loops_ducks_and_copies_video(self) -> None:
+        mixer = BackgroundMusicMixer("python")
+        command = mixer.command(
+            Path("raw.mp4"),
+            Path("speech.wav"),
+            Path("music.mp3"),
+            Path("final.mp4"),
+            duration=12.5,
+            volume=0.25,
+            ducking=True,
+            fade_in=1.5,
+            fade_out=2.0,
+        )
+        joined = " ".join(command)
+        self.assertIn("-stream_loop -1", joined)
+        self.assertIn("sidechaincompress", joined)
+        self.assertIn("afade=t=in:st=0:d=1.500", joined)
+        self.assertIn("afade=t=out:st=10.500:d=2.000", joined)
+        self.assertIn("-c:v copy", joined)
+        self.assertIn("-t 12.500", joined)
 
     def test_video_compiler_builds_dynamic_chain(self) -> None:
         segments = [
@@ -526,6 +564,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("patch", schema["paths"]["/api/settings"])
         self.assertIn("/api/projects/default", schema["paths"])
         self.assertIn("/api/projects/{project_id}/assets/{kind}", schema["paths"])
+        self.assertIn("/api/projects/{project_id}/files/{kind}", schema["paths"])
         self.assertIn("/api/projects/{project_id}/enqueue", schema["paths"])
         self.assertIn("/api/tasks", schema["paths"])
         self.assertIn("/api/tasks/{task_id}/cancel", schema["paths"])
@@ -541,6 +580,37 @@ class CoreTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["access-control-allow-origin"], "http://localhost:5173")
+
+    def test_project_display_progress_does_not_reset_between_stages(self) -> None:
+        from app.main import project_display_progress
+
+        statuses = [
+            "CREATED",
+            "ANALYZING_IMAGE",
+            "SCRIPT_READY",
+            "GENERATING_AUDIO",
+            "ALIGNING_SPEECH",
+            "PLAN_READY",
+            "GENERATING_VIDEO",
+            "VIDEO_READY",
+            "BURNING_SUBTITLES",
+            "SUBTITLE_READY",
+            "MIXING_BGM",
+            "COMPLETED",
+        ]
+        values = [project_display_progress({"status": status}) for status in statuses]
+        self.assertEqual(values, sorted(values))
+        self.assertEqual(values[0], 0)
+        self.assertEqual(values[-1], 100)
+        self.assertEqual(project_display_progress({"status": "SCRIPT_READY", "progress": 100}), 20)
+        self.assertEqual(project_display_progress({"status": "GENERATING_VIDEO", "progress": 10}), 50)
+
+    def test_public_project_exposes_overall_and_stage_progress(self) -> None:
+        from app.main import public_project
+
+        result = public_project({"status": "GENERATING_VIDEO", "progress": 10})
+        self.assertEqual(result["progress"], 50)
+        self.assertEqual(result["stage_progress"], 10)
 
     def test_task_display_uses_newer_project_state_after_historical_failure(self) -> None:
         from app.main import task_display_state
@@ -1134,6 +1204,111 @@ class CoreTests(unittest.TestCase):
         self.assertIn(script, director.prompt)
         self.assertIn("Opening market opportunity.", director.prompt)
         self.assertIn("semantic role", director.prompt)
+
+    def test_alignment_builds_readable_subtitles_from_original_script(self) -> None:
+        script = "百万亿健康管理蓝海市场，机遇就在眼前。"
+        chars = SpeechAlignmentService._estimated_chars(script, 5.0)
+        result = SpeechAlignmentService._build_result(
+            script, 5.0, chars, "estimated", 0.45, "test"
+        )
+        cues = result["subtitle_cues"]
+        self.assertGreaterEqual(len(cues), 2)
+        self.assertEqual("".join(cue["text"] for cue in cues), script)
+        self.assertTrue(all(cue["end"] > cue["start"] for cue in cues))
+        self.assertTrue(
+            all(left["end"] <= right["start"] for left, right in zip(cues, cues[1:]))
+        )
+
+    def test_custom_subtitle_length_keeps_character_timestamps(self) -> None:
+        script = "这是连续逗号，，，后面继续说的一段较长口播文案。"
+        chars = SpeechAlignmentService._estimated_chars(script, 5.0)
+        result = SpeechAlignmentService._build_result(
+            script, 5.0, chars, "estimated", 0.45, "test", 8
+        )
+        self.assertTrue(result["characters"])
+        self.assertTrue(all(not cue["text"].startswith(("，", ",")) for cue in result["subtitle_cues"]))
+        rebuilt = SpeechAlignmentService.subtitle_cues_from_timeline(
+            script, result["characters"], 12
+        )
+        self.assertEqual("".join(cue["text"] for cue in rebuilt), script)
+
+    def test_subtitle_document_writes_srt_and_layered_ass(self) -> None:
+        cues = [
+            {"start": 0.0, "end": 1.25, "text": "第一句字幕"},
+            {"start": 1.25, "end": 3.0, "text": "第二句字幕"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            srt = SubtitleDocument.write_srt(root / "subtitle.srt", cues)
+            ass = SubtitleDocument.write_ass(
+                root / "subtitle.ass",
+                cues,
+                {
+                    "subtitle_font_name": "Microsoft YaHei",
+                    "subtitle_font_size": 60,
+                    "subtitle_font_bold": True,
+                    "subtitle_font_color": "#FFFFFF",
+                    "subtitle_position": "custom",
+                    "subtitle_custom_position": 72,
+                    "subtitle_stroke_color": "#000000",
+                    "subtitle_stroke_width": 2,
+                    "subtitle_background_enabled": True,
+                    "subtitle_background_color": "#112233",
+                    "subtitle_background_opacity": 55,
+                },
+                1080,
+                1920,
+            )
+            srt_text = srt.read_text(encoding="utf-8")
+            ass_text = ass.read_text(encoding="utf-8-sig")
+        self.assertIn("00:00:00,000 --> 00:00:01,250", srt_text)
+        self.assertIn("Style: Text,Microsoft YaHei,60", ass_text)
+        text_style = next(line for line in ass_text.splitlines() if line.startswith("Style: Text,"))
+        self.assertEqual(text_style.split(",")[7], "-1")
+        self.assertEqual(text_style.split(",")[5], "&H00000000")
+        self.assertEqual(float(text_style.split(",")[16]), 2.0)
+        self.assertIn("Style: Box,Microsoft YaHei,60", ass_text)
+        self.assertIn("{\\pos(540,1382)}第一句字幕", ass_text)
+        self.assertEqual(ass_text.count("Dialogue: 0,"), 2)
+        self.assertEqual(ass_text.count("Dialogue: 1,"), 2)
+
+    def test_video_title_is_two_colored_lines_for_full_video_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ass = SubtitleDocument.write_ass(
+                Path(directory) / "title.ass",
+                [{"start": 0.0, "end": 2.0, "text": "测试字幕"}],
+                {
+                    "video_title_enabled": True,
+                    "video_title": "百万亿健康管理蓝海市场\n机遇就在眼前",
+                    "video_title_font_name": "Microsoft YaHei",
+                    "video_title_font_size": 88,
+                    "video_title_primary_color": "#FFFFFF",
+                    "video_title_secondary_color": "#FFD84D",
+                    "video_title_position": 10,
+                    "video_title_stroke_color": "#000000",
+                    "video_title_stroke_width": 4,
+                },
+                1080,
+                1920,
+                video_duration=16.64,
+            )
+            content = ass.read_text(encoding="utf-8-sig")
+        self.assertIn("Style: Title,Microsoft YaHei,88", content)
+        self.assertIn("Style: TitleAccent,Microsoft YaHei,88,&H004DD8FF", content)
+        self.assertIn(
+            "Dialogue: 2,0:00:00.00,0:00:16.64,Title,,0,0,0,,"
+            "{\\pos(540,192)}百万亿健康管理蓝海市场",
+            content,
+        )
+        self.assertIn("Dialogue: 2,0:00:00.00,0:00:16.64,TitleAccent", content)
+
+    def test_video_title_suggestion_uses_first_two_script_clauses(self) -> None:
+        from app.main import suggest_video_title
+
+        self.assertEqual(
+            suggest_video_title("百万亿健康管理蓝海市场，机遇就在眼前。后续正文。"),
+            "百万亿健康管理蓝海市场\n机遇就在眼前",
+        )
 
     def _assert_references_exist(self, workflow: dict) -> None:
         for node_id, node in workflow.items():

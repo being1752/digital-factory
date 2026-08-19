@@ -23,6 +23,7 @@ FastAPI 后端服务，将 AI 导演、IndexTTS2 情绪语音和 InfiniteTalk �
 - 左侧队列仅展示等待、运行、失败和取消任务；完成后自动移出队列并保留在最近项目。右侧项目区从提交起即可查看数字人图片和原始口播稿，名称随时可改，音频开始前可改口播稿。
 - 音频生成可按任务选择 IndexTTS2 基础情感版（`indextts2-basic_emo_api.json`）或 IndexTTS2 音色与情感克隆版（`indextts2-voice-clone_api.json`）；两套 API 模板互不影响。
 - 视频生成使用 InfiniteTalk 单人跑火车 API 母版（`infinitetalk-single-person-train_api.json`）。
+- 可在任务创建时上传背景音乐；InfiniteTalk 完成后由本地 FFmpeg 自动循环、裁剪、淡入淡出并在人声出现时压低配乐，同时保留无配乐版和配乐版。历史成片也可以直接补配乐，不需要重新生成视频。
 
 ## 启动
 
@@ -135,6 +136,46 @@ TCP `5173`。本项目不会自动修改系统防火墙。
 ComfyUI URL 会保存到后端 SQLite 配置中。任务面板不再单独填写地址，保存后所有手动任务和队列任务都使用当前全局配置；`DEFAULT_COMFY_URL` 仅作为尚未保存配置时的初始默认值。
 
 生成文件位于 `data/jobs/<项目ID>/`。编译后的 TTS 和视频 API 工作流也会保留，便于排错。
+
+### 视频字幕
+
+创建任务时默认开启字幕，并提供“视频号口播”预设：粗体、64号、距顶部73%、单条14字、
+黑色外描边、无背景；也可以继续自定义字体、字号、颜色、位置、描边宽度、背景和最大字数。文字颜色支持常用色块或 `#RRGGBB` 十六进制输入。字幕时间轴直接复用本项目的本地 Whisper＋原稿字符级
+强制对齐结果，因此字幕正文保持用户原稿，不使用 Whisper 可能识别错误的文字。
+
+后端先生成无字幕原片，再使用本机 FFmpeg/libass 烧录 ASS 字幕，最后按需添加背景音乐：
+
+```text
+InfiniteTalk -> video_raw.* -> video_subtitled.mp4 -> video_with_bgm.mp4
+```
+
+相关产物包括：
+
+```text
+data/jobs/<项目ID>/subtitle/subtitle.json
+data/jobs/<项目ID>/subtitle/subtitle.srt
+data/jobs/<项目ID>/subtitle/subtitle.ass
+data/jobs/<项目ID>/output/video_subtitled.mp4
+```
+
+成片后仍可修改字幕样式并单独重新生成字幕版，不会重新运行 InfiniteTalk。页面支持下载
+SRT、无字幕原片、字幕版和最终配乐成片。Windows 默认使用 `Microsoft YaHei`；Linux
+建议安装 `Noto Sans CJK SC`。也可以将具有合法授权的 TTF、TTC 或 OTF 字体放入
+`resource/fonts/`，然后通过字体名称使用。
+
+### 视频背景音乐
+
+创建任务时勾选“视频生成后添加背景音乐”并上传音乐。背景音乐支持
+WAV、FLAC、MP3、M4A、M4S、MP4、OGG 和 AAC，单文件上限 200MB。
+后端使用本机 `ffmpeg` 完成混音，不占用 ComfyUI GPU。输出文件包括：
+
+```text
+data/jobs/<项目ID>/output/video_raw.*
+data/jobs/<项目ID>/output/video_with_bgm.mp4
+```
+
+更换音乐、调整音量、人声避让或淡入淡出后，只需重新生成配乐版，不会重新运行
+InfiniteTalk。若混音失败，项目显示“配乐失败”，无配乐原视频仍可播放和下载。
 
 ## 服务器部署
 

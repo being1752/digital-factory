@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import uuid
 from contextlib import asynccontextmanager
@@ -59,17 +60,93 @@ def global_comfy_url() -> str:
     return repository.get_setting("comfy_url", settings.default_comfy_url)
 
 
+PROJECT_DISPLAY_PROGRESS = {
+    "CREATED": 0,
+    "QUEUE_WAITING": 0,
+    "UPLOADING_ASSETS": 1,
+    "ANALYZE_QUEUED": 2,
+    "ANALYZING_IMAGE": 5,
+    "ANALYSIS_RETRYING": 5,
+    "SCRIPT_READY": 20,
+    "AUDIO_QUEUED": 20,
+    "UPLOADING_REFERENCE_AUDIO": 22,
+    "GENERATING_AUDIO": 28,
+    "ALIGN_QUEUED": 34,
+    "ALIGNING_SPEECH": 36,
+    "PLANNING_ACTIONS": 38,
+    "PLAN_READY": 40,
+    "VIDEO_QUEUED": 40,
+    "UPLOADING_VIDEO_ASSETS": 42,
+    "GENERATING_VIDEO": 50,
+    "VIDEO_READY": 88,
+    "SUBTITLE_QUEUED": 88,
+    "BURNING_SUBTITLES": 92,
+    "SUBTITLE_READY": 96,
+    "BGM_QUEUED": 96,
+    "MIXING_BGM": 98,
+    "BGM_ERROR": 100,
+    "COMPLETED": 100,
+    "QUEUE_CANCELLED": 0,
+}
+
+
+def project_display_progress(project: dict[str, Any]) -> int:
+    """Convert per-stage runner progress into one monotonic production percentage."""
+    status = str(project.get("status") or "")
+    if status in PROJECT_DISPLAY_PROGRESS:
+        return PROJECT_DISPLAY_PROGRESS[status]
+    raw = max(0, min(100, int(project.get("progress") or 0)))
+    if status == "ERROR":
+        if project.get("bgm_video_path"):
+            return 100
+        if project.get("subtitle_video_path"):
+            return max(96, raw)
+        if project.get("raw_video_path") or project.get("video_path"):
+            return max(88, raw)
+        if project.get("audio_path") and project.get("segments"):
+            return max(40, raw)
+        if project.get("script") and project.get("image_analysis"):
+            return max(20, raw)
+    return raw
+
+
+def suggest_video_title(script: str) -> str:
+    text = re.sub(r"\s+", "", str(script or "")).strip()
+    if not text:
+        return ""
+    sentences = [part for part in re.split(r"[。！？!?]+", text) if part]
+    first = sentences[0] if sentences else text
+    clauses = [part.strip("，,；;：:") for part in re.split(r"[，,；;：:]", first) if part.strip("，,；;：:")]
+    lines = clauses[:2]
+    if len(lines) == 1 and len(lines[0]) > 12:
+        value = lines[0]
+        split_at = min(12, max(6, (len(value) + 1) // 2))
+        lines = [value[:split_at], value[split_at:]]
+    if len(lines) == 1 and len(sentences) > 1:
+        lines.append(sentences[1])
+    return "\n".join(line[:12] for line in lines[:2] if line)
+
+
 def public_project(project: dict[str, Any]) -> dict[str, Any]:
     hidden = {
         "comfy_url",
         "image_path",
         "voice_path",
         "emotion_voice_path",
+        "bgm_path",
         "audio_path",
         "video_path",
+        "raw_video_path",
+        "bgm_video_path",
+        "subtitle_video_path",
+        "subtitle_path",
+        "subtitle_ass_path",
         "project_dir",
     }
     result = {key: value for key, value in project.items() if key not in hidden}
+    result["stage_progress"] = max(0, min(100, int(project.get("progress") or 0)))
+    result["progress"] = project_display_progress(project)
+
     def exists(field: str) -> bool:
         value = project.get(field)
         return bool(value and Path(value).exists())
@@ -79,6 +156,44 @@ def public_project(project: dict[str, Any]) -> dict[str, Any]:
     result["has_emotion_voice"] = exists("emotion_voice_path")
     result["has_audio"] = exists("audio_path")
     result["has_video"] = exists("video_path")
+    result["has_bgm"] = exists("bgm_path")
+    legacy_raw_video = bool(
+        not project.get("bgm_video_path")
+        and project.get("video_path")
+        and Path(project["video_path"]).exists()
+    )
+    result["has_raw_video"] = exists("raw_video_path") or legacy_raw_video
+    result["has_bgm_video"] = exists("bgm_video_path")
+    result["has_subtitle_video"] = exists("subtitle_video_path")
+    result["has_subtitle"] = exists("subtitle_path")
+    result.setdefault("bgm_enabled", False)
+    result.setdefault("bgm_volume", 0.25)
+    result.setdefault("bgm_ducking", True)
+    result.setdefault("bgm_fade_in", 1.5)
+    result.setdefault("bgm_fade_out", 2.0)
+    result.setdefault("subtitle_enabled", False)
+    result.setdefault("subtitle_font_name", "Microsoft YaHei")
+    result.setdefault("subtitle_font_size", 64)
+    result.setdefault("subtitle_font_bold", True)
+    result.setdefault("subtitle_font_color", "#FFFFFF")
+    result.setdefault("subtitle_position", "custom")
+    result.setdefault("subtitle_custom_position", 73)
+    result.setdefault("subtitle_stroke_color", "#000000")
+    result.setdefault("subtitle_stroke_width", 3)
+    result.setdefault("subtitle_background_enabled", False)
+    result.setdefault("subtitle_background_color", "#000000")
+    result.setdefault("subtitle_background_opacity", 40)
+    result.setdefault("subtitle_max_chars", 14)
+    result.setdefault("video_title_enabled", True)
+    if not str(result.get("video_title") or "").strip():
+        result["video_title"] = suggest_video_title(project.get("original_script") or project.get("script") or "")
+    result.setdefault("video_title_font_name", "Microsoft YaHei")
+    result.setdefault("video_title_font_size", 88)
+    result.setdefault("video_title_primary_color", "#FFFFFF")
+    result.setdefault("video_title_secondary_color", "#FFD84D")
+    result.setdefault("video_title_position", 10)
+    result.setdefault("video_title_stroke_color", "#000000")
+    result.setdefault("video_title_stroke_width", 4)
     result["can_edit_original_script"] = can_edit_project_script(project)
     return result
 
@@ -125,8 +240,11 @@ def public_task(task: dict[str, Any], queue_position: int | None = None) -> dict
             "original_script", (task.get("snapshot") or {}).get("original_script", "")
         )
         result["project_status"] = project.get("status", "")
-        result["project_progress"] = project.get("progress", 0)
-        result["display_progress"] = project.get("progress", task.get("progress", 0))
+        result["project_stage_progress"] = max(
+            0, min(100, int(project.get("progress") or 0))
+        )
+        result["project_progress"] = project_display_progress(project)
+        result["display_progress"] = result["project_progress"]
         result["has_audio"] = bool(
             project.get("audio_path") and Path(project["audio_path"]).is_file()
         )
@@ -243,6 +361,8 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
         and not payload.expect_emotion_voice_upload
     ):
         raise HTTPException(422, "IndexTTS2 音色与情感克隆版请选择并上传情感参考音频")
+    if payload.bgm_enabled and not payload.expect_bgm_upload:
+        raise HTTPException(422, "启用视频配乐后请选择并上传背景音乐")
     project_id = uuid.uuid4().hex[:12]
     project_dir = settings.data_dir / "jobs" / project_id
     input_dir = project_dir / "input"
@@ -250,6 +370,7 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
     image_path = input_dir / f"portrait{image_source.suffix or '.png'}"
     voice_path = input_dir / f"voice{voice_source.suffix or '.m4a'}"
     emotion_voice_path = input_dir / "emotion_voice.m4a"
+    bgm_path = input_dir / "background_music.mp3"
     if image_source.exists() and not payload.expect_image_upload:
         shutil.copyfile(image_source, image_path)
     if voice_source.exists() and not payload.expect_voice_upload:
@@ -268,6 +389,7 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
                 payload.expect_image_upload
                 or payload.expect_voice_upload
                 or payload.expect_emotion_voice_upload
+                or payload.expect_bgm_upload
             ),
             "project_dir": str(project_dir),
             "image_path": str(image_path),
@@ -277,6 +399,34 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
                 if payload.tts_engine == "indextts2_voice_clone"
                 else None
             ),
+            "bgm_enabled": payload.bgm_enabled,
+            "bgm_path": str(bgm_path) if payload.bgm_enabled else None,
+            "bgm_volume": payload.bgm_volume,
+            "bgm_ducking": payload.bgm_ducking,
+            "bgm_fade_in": payload.bgm_fade_in,
+            "bgm_fade_out": payload.bgm_fade_out,
+            "subtitle_enabled": payload.subtitle_enabled,
+            "subtitle_font_name": payload.subtitle_font_name,
+            "subtitle_font_size": payload.subtitle_font_size,
+            "subtitle_font_bold": payload.subtitle_font_bold,
+            "subtitle_font_color": payload.subtitle_font_color,
+            "subtitle_position": payload.subtitle_position,
+            "subtitle_custom_position": payload.subtitle_custom_position,
+            "subtitle_stroke_color": payload.subtitle_stroke_color,
+            "subtitle_stroke_width": payload.subtitle_stroke_width,
+            "subtitle_background_enabled": payload.subtitle_background_enabled,
+            "subtitle_background_color": payload.subtitle_background_color,
+            "subtitle_background_opacity": payload.subtitle_background_opacity,
+            "subtitle_max_chars": payload.subtitle_max_chars,
+            "video_title_enabled": payload.video_title_enabled,
+            "video_title": payload.video_title.strip() or suggest_video_title(payload.original_script),
+            "video_title_font_name": payload.video_title_font_name,
+            "video_title_font_size": payload.video_title_font_size,
+            "video_title_primary_color": payload.video_title_primary_color,
+            "video_title_secondary_color": payload.video_title_secondary_color,
+            "video_title_position": payload.video_title_position,
+            "video_title_stroke_color": payload.video_title_stroke_color,
+            "video_title_stroke_width": payload.video_title_stroke_width,
             "status": "CREATED",
             "progress": 0,
             "content_revision": 0,
@@ -331,6 +481,19 @@ async def patch_app_settings(payload: AppSettingsPatch) -> dict[str, str]:
     return {"comfy_url": comfy_url}
 
 
+@app.get("/api/fonts")
+async def list_subtitle_fonts() -> list[str]:
+    names = ["Microsoft YaHei", "SimHei", "Arial", "Noto Sans CJK SC"]
+    font_dir = settings.root / "resource" / "fonts"
+    if font_dir.is_dir():
+        names.extend(
+            path.stem
+            for path in font_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in {".ttf", ".ttc", ".otf"}
+        )
+    return list(dict.fromkeys(names))
+
+
 @app.post("/api/projects")
 async def create_project(
     original_script: Annotated[str, Form()],
@@ -343,6 +506,34 @@ async def create_project(
     image: Annotated[UploadFile | None, File()] = None,
     voice: Annotated[UploadFile | None, File()] = None,
     emotion_voice: Annotated[UploadFile | None, File()] = None,
+    bgm: Annotated[UploadFile | None, File()] = None,
+    bgm_enabled: Annotated[bool, Form()] = False,
+    bgm_volume: Annotated[float, Form()] = 0.25,
+    bgm_ducking: Annotated[bool, Form()] = True,
+    bgm_fade_in: Annotated[float, Form()] = 1.5,
+    bgm_fade_out: Annotated[float, Form()] = 2.0,
+    subtitle_enabled: Annotated[bool, Form()] = True,
+    subtitle_font_name: Annotated[str, Form()] = "Microsoft YaHei",
+    subtitle_font_size: Annotated[int, Form()] = 64,
+    subtitle_font_bold: Annotated[bool, Form()] = True,
+    subtitle_font_color: Annotated[str, Form()] = "#FFFFFF",
+    subtitle_position: Annotated[str, Form()] = "custom",
+    subtitle_custom_position: Annotated[float, Form()] = 73,
+    subtitle_stroke_color: Annotated[str, Form()] = "#000000",
+    subtitle_stroke_width: Annotated[float, Form()] = 3,
+    subtitle_background_enabled: Annotated[bool, Form()] = False,
+    subtitle_background_color: Annotated[str, Form()] = "#000000",
+    subtitle_background_opacity: Annotated[int, Form()] = 40,
+    subtitle_max_chars: Annotated[int, Form()] = 14,
+    video_title_enabled: Annotated[bool, Form()] = True,
+    video_title: Annotated[str, Form()] = "",
+    video_title_font_name: Annotated[str, Form()] = "Microsoft YaHei",
+    video_title_font_size: Annotated[int, Form()] = 88,
+    video_title_primary_color: Annotated[str, Form()] = "#FFFFFF",
+    video_title_secondary_color: Annotated[str, Form()] = "#FFD84D",
+    video_title_position: Annotated[float, Form()] = 10,
+    video_title_stroke_color: Annotated[str, Form()] = "#000000",
+    video_title_stroke_width: Annotated[float, Form()] = 4,
 ) -> dict[str, Any]:
     if not original_script.strip():
         raise HTTPException(422, "口播文案不能为空")
@@ -350,6 +541,10 @@ async def create_project(
         raise HTTPException(422, "未知音频流程")
     if tts_engine == "indextts2_voice_clone" and emotion_voice is None:
         raise HTTPException(422, "IndexTTS2 音色与情感克隆版需要情感参考音频")
+    if bgm_enabled and bgm is None:
+        raise HTTPException(422, "启用视频配乐后需要上传背景音乐")
+    if subtitle_position not in {"top", "center", "bottom", "custom"}:
+        raise HTTPException(422, "未知字幕位置")
 
     project_id = uuid.uuid4().hex[:12]
     project_dir = settings.data_dir / "jobs" / project_id
@@ -364,14 +559,18 @@ async def create_project(
         if emotion_voice
         else ".m4a"
     )
+    bgm_suffix = Path(bgm.filename or "background_music.mp3").suffix.lower() if bgm else ".mp3"
     if image_suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
         raise HTTPException(422, "图片仅支持 PNG、JPG、WEBP")
     if voice_suffix not in {".wav", ".flac", ".mp3", ".m4a", ".m4s", ".mp4", ".ogg"}:
         raise HTTPException(422, "参考音频格式不支持")
     if emotion_voice_suffix not in {".wav", ".flac", ".mp3", ".m4a", ".m4s", ".mp4", ".ogg"}:
         raise HTTPException(422, "情感参考音频格式不支持")
+    if bgm_suffix not in {".wav", ".flac", ".mp3", ".m4a", ".m4s", ".mp4", ".ogg", ".aac"}:
+        raise HTTPException(422, "背景音乐格式不支持")
     image_path, voice_path = input_dir / f"portrait{image_suffix}", input_dir / f"voice{voice_suffix}"
     emotion_voice_path = input_dir / f"emotion_voice{emotion_voice_suffix}"
+    bgm_path = input_dir / f"background_music{bgm_suffix}"
     input_dir.mkdir(parents=True, exist_ok=True)
     if image:
         await save_upload(image, image_path, 25 * 1024 * 1024)
@@ -387,6 +586,8 @@ async def create_project(
         raise HTTPException(422, "请上传参考音色")
     if emotion_voice:
         await save_upload(emotion_voice, emotion_voice_path, 100 * 1024 * 1024)
+    if bgm:
+        await save_upload(bgm, bgm_path, 200 * 1024 * 1024)
 
     project = repository.create(
         {
@@ -406,6 +607,34 @@ async def create_project(
                 if tts_engine == "indextts2_voice_clone"
                 else None
             ),
+            "bgm_enabled": bgm_enabled,
+            "bgm_path": str(bgm_path) if bgm_enabled else None,
+            "bgm_volume": min(1.0, max(0.0, bgm_volume)),
+            "bgm_ducking": bgm_ducking,
+            "bgm_fade_in": min(30.0, max(0.0, bgm_fade_in)),
+            "bgm_fade_out": min(30.0, max(0.0, bgm_fade_out)),
+            "subtitle_enabled": subtitle_enabled,
+            "subtitle_font_name": subtitle_font_name.strip() or "Microsoft YaHei",
+            "subtitle_font_size": min(160, max(12, subtitle_font_size)),
+            "subtitle_font_bold": subtitle_font_bold,
+            "subtitle_font_color": subtitle_font_color,
+            "subtitle_position": subtitle_position,
+            "subtitle_custom_position": min(100, max(0, subtitle_custom_position)),
+            "subtitle_stroke_color": subtitle_stroke_color,
+            "subtitle_stroke_width": min(12, max(0, subtitle_stroke_width)),
+            "subtitle_background_enabled": subtitle_background_enabled,
+            "subtitle_background_color": subtitle_background_color,
+            "subtitle_background_opacity": min(100, max(0, subtitle_background_opacity)),
+            "subtitle_max_chars": min(32, max(6, subtitle_max_chars)),
+            "video_title_enabled": video_title_enabled,
+            "video_title": video_title.strip() or suggest_video_title(original_script),
+            "video_title_font_name": video_title_font_name.strip() or "Microsoft YaHei",
+            "video_title_font_size": min(180, max(24, video_title_font_size)),
+            "video_title_primary_color": video_title_primary_color,
+            "video_title_secondary_color": video_title_secondary_color,
+            "video_title_position": min(50, max(0, video_title_position)),
+            "video_title_stroke_color": video_title_stroke_color,
+            "video_title_stroke_width": min(12, max(0, video_title_stroke_width)),
             "status": "CREATED",
             "progress": 0,
             "content_revision": 0,
@@ -555,6 +784,11 @@ async def patch_production_task(
                     "audio_path": None,
                     "audio_duration": None,
                     "video_path": None,
+                    "raw_video_path": None,
+                    "bgm_video_path": None,
+                    "subtitle_video_path": None,
+                    "subtitle_path": None,
+                    "subtitle_ass_path": None,
                     "status": (
                         "ANALYZING_IMAGE"
                         if task.get("status") == "RUNNING"
@@ -668,6 +902,11 @@ async def patch_project(project_id: str, patch: ProjectPatch) -> dict[str, Any]:
                     "audio_path": None,
                     "audio_duration": None,
                     "video_path": None,
+                    "raw_video_path": None,
+                    "bgm_video_path": None,
+                    "subtitle_video_path": None,
+                    "subtitle_path": None,
+                    "subtitle_ass_path": None,
                     "status": (
                         "ANALYZING_IMAGE"
                         if active_task and active_task["status"] == "RUNNING"
@@ -703,6 +942,11 @@ async def patch_project(project_id: str, patch: ProjectPatch) -> dict[str, Any]:
             {
                 "audio_path": None,
                 "video_path": None,
+                "raw_video_path": None,
+                "bgm_video_path": None,
+                "subtitle_video_path": None,
+                "subtitle_path": None,
+                "subtitle_ass_path": None,
                 "audio_duration": None,
                 "segments": [],
                 "status": "SCRIPT_READY",
@@ -710,7 +954,83 @@ async def patch_project(project_id: str, patch: ProjectPatch) -> dict[str, Any]:
             }
         )
     elif "segments" in changes:
-        changes.update({"video_path": None, "status": "PLAN_READY", "progress": 100})
+        changes.update(
+            {
+                "video_path": None,
+                "raw_video_path": None,
+                "bgm_video_path": None,
+                "subtitle_video_path": None,
+                "subtitle_path": None,
+                "subtitle_ass_path": None,
+                "status": "PLAN_READY",
+                "progress": 100,
+            }
+        )
+    bgm_settings_changed = bool(
+        {"bgm_enabled", "bgm_volume", "bgm_ducking", "bgm_fade_in", "bgm_fade_out"}
+        & set(changes)
+    )
+    if bgm_settings_changed:
+        source_video = project.get("subtitle_video_path") or project.get("raw_video_path") or (
+            project.get("video_path") if not project.get("bgm_video_path") else None
+        )
+        changes["bgm_video_path"] = None
+        if source_video and Path(source_video).is_file():
+            changes.update(
+                {
+                    "video_path": source_video,
+                    "status": "VIDEO_READY" if changes.get("bgm_enabled", project.get("bgm_enabled")) else "COMPLETED",
+                    "progress": 100,
+                    "error": None,
+                }
+            )
+    subtitle_fields = {
+        "subtitle_enabled",
+        "subtitle_font_name",
+        "subtitle_font_size",
+        "subtitle_font_bold",
+        "subtitle_font_color",
+        "subtitle_position",
+        "subtitle_custom_position",
+        "subtitle_stroke_color",
+        "subtitle_stroke_width",
+        "subtitle_background_enabled",
+        "subtitle_background_color",
+        "subtitle_background_opacity",
+        "subtitle_max_chars",
+        "video_title_enabled",
+        "video_title",
+        "video_title_font_name",
+        "video_title_font_size",
+        "video_title_primary_color",
+        "video_title_secondary_color",
+        "video_title_position",
+        "video_title_stroke_color",
+        "video_title_stroke_width",
+    }
+    if subtitle_fields & set(changes):
+        raw_video = project.get("raw_video_path")
+        changes.update(
+            {
+                "subtitle_video_path": None,
+                "subtitle_path": None,
+                "subtitle_ass_path": None,
+                "bgm_video_path": None,
+            }
+        )
+        if raw_video and Path(raw_video).is_file():
+            subtitle_enabled = changes.get("subtitle_enabled", project.get("subtitle_enabled"))
+            title_enabled = changes.get("video_title_enabled", project.get("video_title_enabled", True))
+            enabled = subtitle_enabled or title_enabled
+            needs_bgm = changes.get("bgm_enabled", project.get("bgm_enabled"))
+            changes.update(
+                {
+                    "video_path": raw_video,
+                    "status": "VIDEO_READY" if enabled or needs_bgm else "COMPLETED",
+                    "progress": 100,
+                    "error": None,
+                }
+            )
     updated = repository.update(project_id, **changes)
     if original_script_changed and active_task:
         repository.update_task_payload(
@@ -730,14 +1050,34 @@ async def upload_project_asset(
             raise HTTPException(422, "图片仅支持 PNG、JPG、WEBP")
         destination = Path(project["project_dir"]) / "input" / f"portrait{suffix}"
         await save_upload(file, destination, 25 * 1024 * 1024)
-        changes = {"image_path": str(destination), "status": "CREATED", "image_analysis": None}
+        changes = {
+            "image_path": str(destination),
+            "status": "CREATED",
+            "image_analysis": None,
+            "video_path": None,
+            "raw_video_path": None,
+            "bgm_video_path": None,
+            "subtitle_video_path": None,
+            "subtitle_path": None,
+            "subtitle_ass_path": None,
+        }
     elif kind == "voice":
         suffix = Path(file.filename or "voice.m4s").suffix.lower()
         if suffix not in {".wav", ".flac", ".mp3", ".m4a", ".m4s", ".mp4", ".ogg"}:
             raise HTTPException(422, "参考音频格式不支持")
         destination = Path(project["project_dir"]) / "input" / f"voice{suffix}"
         await save_upload(file, destination, 100 * 1024 * 1024)
-        changes = {"voice_path": str(destination), "audio_path": None, "video_path": None, "status": "CREATED"}
+        changes = {
+            "voice_path": str(destination),
+            "audio_path": None,
+            "video_path": None,
+            "raw_video_path": None,
+            "bgm_video_path": None,
+            "subtitle_video_path": None,
+            "subtitle_path": None,
+            "subtitle_ass_path": None,
+            "status": "CREATED",
+        }
     elif kind == "emotion_voice":
         suffix = Path(file.filename or "emotion_voice.m4a").suffix.lower()
         if suffix not in {".wav", ".flac", ".mp3", ".m4a", ".m4s", ".mp4", ".ogg"}:
@@ -750,7 +1090,27 @@ async def upload_project_asset(
             "emotion_voice_path": str(destination),
             "audio_path": None,
             "video_path": None,
+            "raw_video_path": None,
+            "bgm_video_path": None,
+            "subtitle_video_path": None,
+            "subtitle_path": None,
+            "subtitle_ass_path": None,
             "status": "CREATED",
+        }
+    elif kind == "bgm":
+        suffix = Path(file.filename or "background_music.mp3").suffix.lower()
+        if suffix not in {".wav", ".flac", ".mp3", ".m4a", ".m4s", ".mp4", ".ogg", ".aac"}:
+            raise HTTPException(422, "背景音乐格式不支持")
+        destination = Path(project["project_dir"]) / "input" / f"background_music{suffix}"
+        await save_upload(file, destination, 200 * 1024 * 1024)
+        source_video = project.get("subtitle_video_path") or project.get("raw_video_path")
+        changes = {
+            "bgm_enabled": True,
+            "bgm_path": str(destination),
+            "bgm_video_path": None,
+            "video_path": source_video or project.get("video_path"),
+            "status": "VIDEO_READY" if source_video and Path(source_video).is_file() else project.get("status", "CREATED"),
+            "error": None,
         }
     else:
         raise HTTPException(404, "未知素材类型")
@@ -772,7 +1132,20 @@ async def run_stage(project_id: str, stage: str) -> dict[str, Any]:
 @app.get("/api/projects/{project_id}/files/{kind}")
 async def project_file(project_id: str, kind: str) -> FileResponse:
     project = get_project(project_id)
-    field = {"image": "image_path", "voice": "voice_path", "audio": "audio_path", "video": "video_path"}.get(kind)
+    field = {
+        "image": "image_path",
+        "voice": "voice_path",
+        "audio": "audio_path",
+        "bgm": "bgm_path",
+        "video": "video_path",
+        "video_raw": "raw_video_path",
+        "video_bgm": "bgm_video_path",
+        "video_subtitled": "subtitle_video_path",
+        "subtitle": "subtitle_path",
+        "subtitle_ass": "subtitle_ass_path",
+    }.get(kind)
+    if kind == "video_raw" and not project.get("raw_video_path") and not project.get("bgm_video_path"):
+        field = "video_path"
     if not field or not project.get(field):
         raise HTTPException(404, "文件不存在")
     path = Path(project[field])

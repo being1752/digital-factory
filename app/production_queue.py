@@ -64,6 +64,10 @@ class ProductionQueue:
             emotion_voice = Path(project.get("emotion_voice_path") or "")
             if not emotion_voice.is_file() and not assets_pending:
                 raise ValueError("IndexTTS2 音色与情感克隆版缺少可用的情感参考音频")
+        if project.get("bgm_enabled"):
+            bgm = Path(project.get("bgm_path") or "")
+            if not bgm.is_file() and not assets_pending:
+                raise ValueError("启用视频配乐后缺少可用的背景音乐")
         if project.get("auto_run") is False:
             raise ValueError("项目未勾选全自动执行，请在项目详情中手动操作")
         task = self.repository.enqueue_task(project_id, project, priority)
@@ -136,6 +140,7 @@ class ProductionQueue:
                     "image_path",
                     "voice_path",
                     "emotion_voice_path",
+                    "bgm_path",
                 }
             }
             if frozen:
@@ -151,6 +156,8 @@ class ProductionQueue:
                 ]
                 if project.get("tts_engine") == "indextts2_voice_clone":
                     required_paths.append(project.get("emotion_voice_path"))
+                if project.get("bgm_enabled"):
+                    required_paths.append(project.get("bgm_path"))
                 if all(value and Path(value).is_file() for value in required_paths):
                     if project.get("assets_pending"):
                         project = self.repository.update(
@@ -244,6 +251,29 @@ class ProductionQueue:
                     task_id, stage="GENERATING_VIDEO", progress=60
                 )
                 await self.runner.generate_video(project_id)
+
+            project = self.repository.get(project_id) or project
+            subtitle_ready = bool(
+                project.get("subtitle_video_path")
+                and Path(project["subtitle_video_path"]).is_file()
+            )
+            overlay_enabled = bool(project.get("subtitle_enabled") or project.get("video_title_enabled", False))
+            if overlay_enabled and not subtitle_ready:
+                self.repository.update_task(
+                    task_id, stage="BURNING_SUBTITLES", progress=90, error=None
+                )
+                await self.runner.render_subtitles(project_id)
+                project = self.repository.get(project_id) or project
+
+            bgm_ready = bool(
+                project.get("bgm_video_path")
+                and Path(project["bgm_video_path"]).is_file()
+            )
+            if project.get("bgm_enabled") and not bgm_ready:
+                self.repository.update_task(
+                    task_id, stage="MIXING_BGM", progress=95, error=None
+                )
+                await self.runner.mix_background_music(project_id)
 
             self.repository.update_task(
                 task_id,

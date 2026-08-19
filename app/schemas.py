@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 EMOTION_KEYS = ("Happy", "Angry", "Sad", "Fear", "Hate", "Low", "Surprise", "Neutral")
 TTSEngine = Literal["indextts2_legacy", "indextts2_voice_clone"]
 TTS_ENGINES = {"indextts2_legacy", "indextts2_voice_clone"}
+SubtitlePosition = Literal["top", "center", "bottom", "custom"]
 
 
 class EmotionVector(BaseModel):
@@ -62,6 +63,33 @@ class ProjectPatch(BaseModel):
     segments: list[Segment] | None = None
     title: str | None = None
     tts_engine: TTSEngine | None = None
+    bgm_enabled: bool | None = None
+    bgm_volume: float | None = Field(default=None, ge=0, le=1)
+    bgm_ducking: bool | None = None
+    bgm_fade_in: float | None = Field(default=None, ge=0, le=30)
+    bgm_fade_out: float | None = Field(default=None, ge=0, le=30)
+    subtitle_enabled: bool | None = None
+    subtitle_font_name: str | None = Field(default=None, max_length=100)
+    subtitle_font_size: int | None = Field(default=None, ge=12, le=160)
+    subtitle_font_bold: bool | None = None
+    subtitle_font_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    subtitle_position: SubtitlePosition | None = None
+    subtitle_custom_position: float | None = Field(default=None, ge=0, le=100)
+    subtitle_stroke_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    subtitle_stroke_width: float | None = Field(default=None, ge=0, le=12)
+    subtitle_background_enabled: bool | None = None
+    subtitle_background_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    subtitle_background_opacity: int | None = Field(default=None, ge=0, le=100)
+    subtitle_max_chars: int | None = Field(default=None, ge=6, le=32)
+    video_title_enabled: bool | None = None
+    video_title: str | None = Field(default=None, max_length=100)
+    video_title_font_name: str | None = Field(default=None, max_length=100)
+    video_title_font_size: int | None = Field(default=None, ge=24, le=180)
+    video_title_primary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    video_title_secondary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    video_title_position: float | None = Field(default=None, ge=0, le=50)
+    video_title_stroke_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    video_title_stroke_width: float | None = Field(default=None, ge=0, le=12)
 
 
 class TaskPatch(BaseModel):
@@ -89,6 +117,34 @@ class ProjectCreate(BaseModel):
     expect_image_upload: bool = False
     expect_voice_upload: bool = False
     expect_emotion_voice_upload: bool = False
+    bgm_enabled: bool = False
+    bgm_volume: float = Field(default=0.25, ge=0, le=1)
+    bgm_ducking: bool = True
+    bgm_fade_in: float = Field(default=1.5, ge=0, le=30)
+    bgm_fade_out: float = Field(default=2.0, ge=0, le=30)
+    expect_bgm_upload: bool = False
+    subtitle_enabled: bool = True
+    subtitle_font_name: str = Field(default="Microsoft YaHei", max_length=100)
+    subtitle_font_size: int = Field(default=64, ge=12, le=160)
+    subtitle_font_bold: bool = True
+    subtitle_font_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    subtitle_position: SubtitlePosition = "custom"
+    subtitle_custom_position: float = Field(default=73, ge=0, le=100)
+    subtitle_stroke_color: str = Field(default="#000000", pattern=r"^#[0-9A-Fa-f]{6}$")
+    subtitle_stroke_width: float = Field(default=3, ge=0, le=12)
+    subtitle_background_enabled: bool = False
+    subtitle_background_color: str = Field(default="#000000", pattern=r"^#[0-9A-Fa-f]{6}$")
+    subtitle_background_opacity: int = Field(default=40, ge=0, le=100)
+    subtitle_max_chars: int = Field(default=14, ge=6, le=32)
+    video_title_enabled: bool = True
+    video_title: str = Field(default="", max_length=100)
+    video_title_font_name: str = Field(default="Microsoft YaHei", max_length=100)
+    video_title_font_size: int = Field(default=88, ge=24, le=180)
+    video_title_primary_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    video_title_secondary_color: str = Field(default="#FFD84D", pattern=r"^#[0-9A-Fa-f]{6}$")
+    video_title_position: float = Field(default=10, ge=0, le=50)
+    video_title_stroke_color: str = Field(default="#000000", pattern=r"^#[0-9A-Fa-f]{6}$")
+    video_title_stroke_width: float = Field(default=4, ge=0, le=12)
 
 
 class ApiEnvelope(BaseModel):

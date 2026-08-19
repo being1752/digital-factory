@@ -32,6 +32,7 @@ class SpeechAlignmentService:
         script: str,
         duration: float,
         work_dir: Path | None = None,
+        subtitle_max_chars: int = 14,
     ) -> dict[str, Any]:
         if not self.settings.asr_enabled:
             chars = self._estimated_chars(script, duration)
@@ -42,6 +43,7 @@ class SpeechAlignmentService:
                 "estimated",
                 0.45,
                 f"未找到本地 Whisper 命令：{self.settings.whisper_executable}，按字符权重估算",
+                subtitle_max_chars,
             )
         try:
             transcription = await self._transcribe(audio_path, work_dir or audio_path.parent / "asr")
@@ -52,7 +54,7 @@ class SpeechAlignmentService:
             if confidence < 0.28:
                 raise ValueError(f"ASR 与原稿匹配度过低（{confidence:.0%}）")
             result = self._build_result(
-                script, duration, source_chars, "asr_forced", confidence, "ASR 时间戳与原始口播稿字符级对齐"
+                script, duration, source_chars, "asr_forced", confidence, "ASR 时间戳与原始口播稿字符级对齐", subtitle_max_chars
             )
             result["recognized_text"] = str(transcription.get("text", ""))
             result["asr_run_dir"] = str(transcription.get("_local_run_dir", ""))
@@ -60,7 +62,7 @@ class SpeechAlignmentService:
         except Exception as exc:
             chars = self._estimated_chars(script, duration)
             return self._build_result(
-                script, duration, chars, "estimated_fallback", 0.35, f"ASR 对齐失败，已降级估算：{exc}"
+                script, duration, chars, "estimated_fallback", 0.35, f"ASR 对齐失败，已降级估算：{exc}", subtitle_max_chars
             )
 
     async def _transcribe(self, audio_path: Path, work_dir: Path) -> dict[str, Any]:
@@ -238,10 +240,14 @@ class SpeechAlignmentService:
         mode: str,
         confidence: float,
         note: str,
+        subtitle_max_chars: int = 14,
     ) -> dict[str, Any]:
         count = max(1, math.ceil((math.ceil(duration * 25) - 9) / 100))
         sentence_ranges = cls._sentence_ranges(script)
         sentences = cls._sentence_timeline(script, chars, sentence_ranges)
+        subtitle_cues = cls._subtitle_cues(
+            script, chars, sentence_ranges, subtitle_max_chars
+        )
         audio_quality = cls._diagnose_audio_timing(
             sentences, chars, mode, confidence, duration
         )
@@ -297,9 +303,102 @@ class SpeechAlignmentService:
             "note": note,
             "duration": round(duration, 3),
             "sentences": sentences,
+            "characters": [
+                {
+                    "char": item.char,
+                    "start": round(item.start, 3),
+                    "end": round(item.end, 3),
+                }
+                for item in chars
+            ],
+            "subtitle_cues": subtitle_cues,
             "audio_quality": audio_quality,
             "windows": windows,
         }
+
+    @classmethod
+    def subtitle_cues_from_timeline(
+        cls, script: str, timeline: list[dict[str, Any]], max_chars: int = 14
+    ) -> list[dict[str, Any]]:
+        chars = [
+            TimedChar(
+                str(item.get("char") or ""),
+                float(item.get("start") or 0),
+                float(item.get("end") or 0),
+            )
+            for item in timeline
+        ]
+        return cls._subtitle_cues(script, chars, cls._sentence_ranges(script), max_chars)
+
+    @classmethod
+    def _subtitle_cues(
+        cls,
+        script: str,
+        chars: list[TimedChar],
+        sentence_ranges: list[tuple[int, int]],
+        max_chars: int = 16,
+    ) -> list[dict[str, Any]]:
+        """Build readable cues from the original script and its forced timestamps."""
+        cues: list[dict[str, Any]] = []
+
+        def append_cue(items: list[TimedChar]) -> None:
+            text = "".join(item.char for item in items).strip()
+            timed = [item for item in items if cls._normalized(item.char)]
+            if text and not timed and cues:
+                cues[-1]["text"] += text
+                return
+            if not text or not timed:
+                return
+            cues.append(
+                {
+                    "index": len(cues) + 1,
+                    "start": round(timed[0].start, 3),
+                    "end": round(max(timed[0].start + 0.05, timed[-1].end), 3),
+                    "text": text,
+                }
+            )
+
+        for sentence_start, sentence_end in sentence_ranges:
+            pending: list[TimedChar] = []
+            visible = 0
+            sentence_chars = chars[sentence_start:sentence_end]
+            punctuation = "。！？!?；;，,、：:"
+            strong_punctuation = "。！？!?；;"
+            soft_punctuation = "，,、：:"
+            soft_break_minimum = max(6, max_chars - 4)
+            for offset, item in enumerate(sentence_chars):
+                pending.append(item)
+                if cls._normalized(item.char):
+                    visible += 1
+                next_char = (
+                    sentence_chars[offset + 1].char
+                    if offset + 1 < len(sentence_chars)
+                    else ""
+                )
+                punctuation_run_ended = next_char not in punctuation
+                natural_break = punctuation_run_ended and (
+                    item.char in strong_punctuation
+                    or (item.char in soft_punctuation and visible >= soft_break_minimum)
+                )
+                hard_break = visible >= max_chars and next_char not in punctuation
+                if natural_break or hard_break:
+                    append_cue(pending)
+                    pending, visible = [], 0
+            append_cue(pending)
+
+        for index, cue in enumerate(cues):
+            next_start = (
+                float(cues[index + 1]["start"])
+                if index + 1 < len(cues)
+                else float(cue["end"])
+            )
+            cue["end"] = round(
+                max(float(cue["end"]), min(next_start, float(cue["start"]) + 0.45)),
+                3,
+            )
+            if index and cue["start"] < cues[index - 1]["end"]:
+                cues[index - 1]["end"] = round(float(cue["start"]), 3)
+        return cues
 
     @classmethod
     def _sentence_timeline(
