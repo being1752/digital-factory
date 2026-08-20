@@ -1212,6 +1212,7 @@ class CoreTests(unittest.TestCase):
             script, 5.0, chars, "estimated", 0.45, "test"
         )
         cues = result["subtitle_cues"]
+        self.assertEqual(result["subtitle_segmentation_version"], 2)
         self.assertGreaterEqual(len(cues), 2)
         self.assertEqual("".join(cue["text"] for cue in cues), script)
         self.assertTrue(all(cue["end"] > cue["start"] for cue in cues))
@@ -1231,6 +1232,40 @@ class CoreTests(unittest.TestCase):
             script, result["characters"], 12
         )
         self.assertEqual("".join(cue["text"] for cue in rebuilt), script)
+
+    def test_subtitle_balancing_does_not_leave_orphan_tail(self) -> None:
+        script = "第一，只收钱、不给支持，交完钱就没人管；"
+        chars = SpeechAlignmentService._estimated_chars(script, 4.0)
+        cues = SpeechAlignmentService._subtitle_cues(
+            script, chars, SpeechAlignmentService._sentence_ranges(script), 15
+        )
+        self.assertEqual([cue["text"] for cue in cues], [
+            "第一，只收钱、不给支持，",
+            "交完钱就没人管；",
+        ])
+        self.assertEqual("".join(cue["text"] for cue in cues), script)
+        self.assertTrue(all(len(SpeechAlignmentService._normalized(cue["text"])) >= 5 for cue in cues))
+        self.assertTrue(all(left["end"] <= right["start"] for left, right in zip(cues, cues[1:])))
+
+    def test_subtitle_balancing_keeps_genuine_short_sentence(self) -> None:
+        script = "对。第一，只收钱、不给支持，交完钱就没人管；"
+        chars = SpeechAlignmentService._estimated_chars(script, 5.0)
+        cues = SpeechAlignmentService._subtitle_cues(
+            script, chars, SpeechAlignmentService._sentence_ranges(script), 15
+        )
+        self.assertEqual(cues[0]["text"], "对。")
+        self.assertNotIn("管；", [cue["text"] for cue in cues])
+        self.assertEqual("".join(cue["text"] for cue in cues), script)
+
+    def test_legacy_subtitle_balancing_uses_the_same_orphan_rule(self) -> None:
+        script = "第一，只收钱、不给支持，交完钱就没人管；"
+        cues = SubtitleDocument.cues_from_sentences(
+            [{"text": script, "start": 0.0, "end": 4.0}], 15
+        )
+        self.assertEqual([cue["text"] for cue in cues], [
+            "第一，只收钱、不给支持，",
+            "交完钱就没人管；",
+        ])
 
     def test_subtitle_document_writes_srt_and_layered_ass(self) -> None:
         cues = [

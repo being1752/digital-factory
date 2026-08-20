@@ -7,6 +7,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from .subtitle_segmentation import balanced_text_chunks
+
 
 class SubtitleError(RuntimeError):
     pass
@@ -77,17 +79,7 @@ class SubtitleDocument:
             start, end = float(sentence.get("start") or 0), float(sentence.get("end") or 0)
             if not text or end <= start:
                 continue
-            chunks: list[str] = []
-            current = ""
-            for char in text:
-                current += char
-                visible = len("".join(current.split()))
-                natural_break = char in "。！？!?；;" or (char in "，,、：:" and visible >= 6)
-                if natural_break or visible >= max_chars:
-                    chunks.append(current.strip())
-                    current = ""
-            if current.strip():
-                chunks.append(current.strip())
+            chunks = [chunk.strip() for chunk in balanced_text_chunks(text, max_chars) if chunk.strip()]
             weights = [max(1, len("".join(chunk.split()))) for chunk in chunks]
             total = sum(weights) or 1
             cursor = start

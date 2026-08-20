@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .subtitle_segmentation import (
+    SUBTITLE_SEGMENTATION_VERSION,
+    balanced_chunk_ranges,
+)
 
 
 @dataclass
@@ -312,6 +316,7 @@ class SpeechAlignmentService:
                 for item in chars
             ],
             "subtitle_cues": subtitle_cues,
+            "subtitle_segmentation_version": SUBTITLE_SEGMENTATION_VERSION,
             "audio_quality": audio_quality,
             "windows": windows,
         }
@@ -359,32 +364,10 @@ class SpeechAlignmentService:
             )
 
         for sentence_start, sentence_end in sentence_ranges:
-            pending: list[TimedChar] = []
-            visible = 0
             sentence_chars = chars[sentence_start:sentence_end]
-            punctuation = "。！？!?；;，,、：:"
-            strong_punctuation = "。！？!?；;"
-            soft_punctuation = "，,、：:"
-            soft_break_minimum = max(6, max_chars - 4)
-            for offset, item in enumerate(sentence_chars):
-                pending.append(item)
-                if cls._normalized(item.char):
-                    visible += 1
-                next_char = (
-                    sentence_chars[offset + 1].char
-                    if offset + 1 < len(sentence_chars)
-                    else ""
-                )
-                punctuation_run_ended = next_char not in punctuation
-                natural_break = punctuation_run_ended and (
-                    item.char in strong_punctuation
-                    or (item.char in soft_punctuation and visible >= soft_break_minimum)
-                )
-                hard_break = visible >= max_chars and next_char not in punctuation
-                if natural_break or hard_break:
-                    append_cue(pending)
-                    pending, visible = [], 0
-            append_cue(pending)
+            sentence_text = "".join(item.char for item in sentence_chars)
+            for chunk_start, chunk_end in balanced_chunk_ranges(sentence_text, max_chars):
+                append_cue(sentence_chars[chunk_start:chunk_end])
 
         for index, cue in enumerate(cues):
             next_start = (

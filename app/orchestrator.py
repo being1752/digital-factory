@@ -13,6 +13,7 @@ from .comfyui import ComfyUIClient, ComfyUIError
 from .config import Settings
 from .postproduction import BackgroundMusicMixer
 from .repository import ProjectRepository
+from .subtitle_segmentation import SUBTITLE_SEGMENTATION_VERSION
 from .subtitles import SubtitleDocument, SubtitleRenderer
 from .workflows import WorkflowCompiler
 
@@ -224,6 +225,9 @@ class TaskRunner:
                 "sentences": alignment.get("sentences", []),
                 "subtitle_cues": alignment.get("subtitle_cues", []),
                 "subtitle_max_chars": alignment.get("subtitle_max_chars", 16),
+                "subtitle_segmentation_version": alignment.get(
+                    "subtitle_segmentation_version", SUBTITLE_SEGMENTATION_VERSION
+                ),
                 "audio_quality": alignment.get("audio_quality", {}),
             },
             segments=segments,
@@ -390,11 +394,26 @@ class TaskRunner:
         raw_video = Path(project.get("raw_video_path") or "")
         if not raw_video.is_file():
             raise ValueError("没有可用于添加字幕的原始视频")
-        alignment = project.get("alignment") or {}
+        alignment = dict(project.get("alignment") or {})
         cues = list(alignment.get("subtitle_cues") or [])
         max_chars = int(project.get("subtitle_max_chars", 14))
-        if not cues or int(alignment.get("subtitle_max_chars", 14)) != max_chars:
-            timeline = list(alignment.get("characters") or [])
+        needs_rebuild = (
+            not cues
+            or int(alignment.get("subtitle_max_chars", 14)) != max_chars
+            or int(alignment.get("subtitle_segmentation_version", 0))
+            != SUBTITLE_SEGMENTATION_VERSION
+        )
+        if needs_rebuild:
+            full_alignment_path = self._project_dir(project) / "plan" / "alignment.json"
+            full_alignment: dict[str, Any] = {}
+            if full_alignment_path.is_file():
+                try:
+                    loaded = json.loads(full_alignment_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        full_alignment = loaded
+                except (OSError, ValueError):
+                    full_alignment = {}
+            timeline = list(full_alignment.get("characters") or alignment.get("characters") or [])
             if timeline:
                 cues = SpeechAlignmentService.subtitle_cues_from_timeline(
                     str(project.get("script") or project.get("original_script") or ""),
@@ -403,9 +422,18 @@ class TaskRunner:
                 )
             else:
                 cues = SubtitleDocument.cues_from_sentences(
-                    list(alignment.get("sentences") or []),
+                    list(full_alignment.get("sentences") or alignment.get("sentences") or []),
                     max_chars,
                 )
+            alignment["subtitle_cues"] = cues
+            alignment["subtitle_max_chars"] = max_chars
+            alignment["subtitle_segmentation_version"] = SUBTITLE_SEGMENTATION_VERSION
+            self.repository.update(project_id, alignment=alignment)
+            if full_alignment:
+                full_alignment["subtitle_cues"] = cues
+                full_alignment["subtitle_max_chars"] = max_chars
+                full_alignment["subtitle_segmentation_version"] = SUBTITLE_SEGMENTATION_VERSION
+                self._write_json(full_alignment_path, full_alignment)
         if project.get("subtitle_enabled") and not cues:
             raise ValueError("没有可用的字幕时间轴，请先重新对齐音频")
         if not project.get("subtitle_enabled"):
