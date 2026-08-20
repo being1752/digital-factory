@@ -155,7 +155,7 @@ export default {
     backToProjectLibrary(){clearInterval(this.poll);this.resetAudio();this.resetVideo();this.current=null;this.projectTab='overview';this.postPanels={title:false,subtitle:false};if(!this.projects.length)this.loadProjects()},
     taskProgressText(task){if(task.video_segment_total){const current=Number(task.video_segment_current||0);if(task.video_progress_mode==='http_fallback'&&!current)return '视频生成中 · 精细进度连接恢复中';return current?`视频生成 ${current}/${task.video_segment_total}${task.video_node_max?` · 采样 ${task.video_node_value||0}/${task.video_node_max}`:''}`:'等待 ComfyUI 开始执行'}if(task.queue_position)return `队列第 ${task.queue_position} 位`;return this.taskStageName(task.stage)},
     copyError(error){const value=typeof error==='string'?error:JSON.stringify(error,null,2);uni.setClipboardData({data:value,success:()=>this.toast('错误信息已复制','success')})},
-    async connectBackend(){try{this.health=await request('/api/health');await Promise.all([this.loadAppSettings(),this.loadFonts(),this.loadProjects(),this.loadTasks()]);this.startRealtimeUpdates()}catch(e){this.toast(e.message)}},
+    async connectBackend(){let ready=false;try{this.health=await request('/api/health');await Promise.all([this.loadAppSettings(),this.loadFonts(),this.loadProjects(),this.loadTasks()]);ready=true}catch(e){this.toast(e.message)}finally{this._needsRealtimeResync=!ready;this.startRealtimeUpdates()}},
     setProjectTitle(event){this.form.title=event?.detail?.value??event?.target?.value??event?.currentTarget?.value??''},
     syncCreateTitle(event){const value=event?.detail?.value??event?.target?.value??this.form.original_script??'',next=this.suggestVideoTitleText(value);if(!String(this.form.video_title||'').trim()||this.form.video_title===this.lastSuggestedVideoTitle)this.form.video_title=next;this.lastSuggestedVideoTitle=next},
     async loadAppSettings(){this.appSettings=await request('/api/settings')},
@@ -232,9 +232,13 @@ export default {
       try{
         const source=new EventSource(`${getApiBase()}/api/events/tasks`)
         this._eventSource=source
-        source.onopen=()=>{this.realtimeConnected=true;clearTimeout(this.queuePoll);clearInterval(this.poll)}
+        source.onopen=async()=>{
+          const shouldResync=Boolean(this._needsRealtimeResync)
+          this.realtimeConnected=true;this._needsRealtimeResync=false;clearTimeout(this.queuePoll);clearInterval(this.poll)
+          if(shouldResync&&this.pageVisible)try{const [health]=await Promise.all([request('/api/health'),this.loadAppSettings(),this.loadFonts(),this.loadTasks(),this.loadProjects()]);this.health=health;if(this.current?.id)this.current=await request(`/api/projects/${this.current.id}`)}catch(_){}
+        }
         source.onmessage=event=>{let message={};try{message=JSON.parse(event.data||'{}')}catch(_){}if(message.entity==='connected')return;this.scheduleRealtimeRefresh(message)}
-        source.onerror=()=>{this.realtimeConnected=false;this.stopRealtimeUpdates(false);this.startQueuePolling()}
+        source.onerror=()=>{this.realtimeConnected=false;this._needsRealtimeResync=true;this.startQueuePolling()}
       }catch(_){this.startQueuePolling()}
     },
     stopRealtimeUpdates(reset=true){if(this._eventSource){this._eventSource.close();this._eventSource=null}if(reset)this.realtimeConnected=false},
@@ -283,7 +287,17 @@ export default {
       clearTimeout(this._realtimeTimer)
       this._realtimeTimer=setTimeout(async()=>{try{if(this.pageVisible&&this.current?.id===projectId)this.current=await request(`/api/projects/${projectId}`)}catch(_){}},220)
     },
-    startQueuePolling(){clearTimeout(this.queuePoll);if(!this.pageVisible)return;const tick=async()=>{if(this.realtimeConnected||!this.pageVisible)return;try{await this.loadTasks();if(this.viewMode==='projects')await this.loadProjects();if(this.current?.id&&this.tasks.some(task=>task.project_id===this.current.id&&task.status==='RUNNING'))this.current=await request(`/api/projects/${this.current.id}`)}catch(_){}if(!this.pageVisible)return;const busy=this.tasks.some(task=>task.status==='RUNNING');this.queuePoll=setTimeout(tick,busy?5000:12000)};this.queuePoll=setTimeout(tick,1000)},
+    startQueuePolling(){
+      clearTimeout(this.queuePoll)
+      if(!this.pageVisible||this.realtimeConnected||!this.tasks.some(task=>task.status==='RUNNING'||task.status==='QUEUED'))return
+      const tick=async()=>{
+        if(this.realtimeConnected||!this.pageVisible)return
+        try{await this.loadTasks();if(this.viewMode==='projects')await this.loadProjects();if(this.current?.id&&this.tasks.some(task=>task.project_id===this.current.id&&(task.status==='RUNNING'||task.status==='QUEUED')))this.current=await request(`/api/projects/${this.current.id}`)}catch(_){}
+        if(this.realtimeConnected||!this.pageVisible||!this.tasks.some(task=>task.status==='RUNNING'||task.status==='QUEUED'))return
+        this.queuePoll=setTimeout(tick,5000)
+      }
+      this.queuePoll=setTimeout(tick,1000)
+    },
     setEmotion(name,value){if(!this.current.emotion)this.current.emotion={};this.current.emotion[name]=value/100},
     async saveDirector(){this.current=await request(`/api/projects/${this.current.id}`,{method:'PATCH',data:{script:this.current.script,emotion:this.current.emotion}});this.toast('导演方案已保存','success')},
     async saveSegments(){this.current=await request(`/api/projects/${this.current.id}`,{method:'PATCH',data:{segments:this.current.segments}});this.toast('动作计划已保存','success')},
