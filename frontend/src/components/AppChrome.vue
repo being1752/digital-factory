@@ -1,7 +1,7 @@
 <template>
   <view>
     <view class="topbar">
-      <view class="brand"><text class="mark">DF</text><view><text class="brand-title">数字人工厂</text><text class="brand-sub">AI DIRECTED · COMFYUI POWERED</text></view></view>
+      <view class="brand"><text class="mark">DF</text><view><text class="brand-title">数字人工厂</text><text class="brand-sub">智能口播视频制作平台</text></view></view>
       <view class="top-actions"><button class="service-status" :class="{online:health.ok}" @click="$emit('navigate','settings')"><text class="status-dot"></text>{{ healthText }}</button><button class="primary small" @click="$emit('navigate','create')">＋ 新建任务</button></view>
     </view>
     <view class="main-nav panel">

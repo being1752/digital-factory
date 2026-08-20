@@ -1,15 +1,15 @@
 <template>
 <view class="panel create-card">
           <text class="eyebrow">PHASE TWO</text><text class="hero">从一张照片，到完整口播视频</text>
-          <text class="lead">本地 Whisper 精确对齐，AI 设计每 4 秒连续动作，ComfyUI 负责声音与视频生成。</text>
+          <text class="lead">根据口播内容自动匹配配音、表情和动作，生成自然连贯的数字人口播视频。</text>
           <view class="create-section">
             <view class="create-section-head"><view><text class="section-index">01</text><text class="plan-title">任务内容</text></view><text class="hint">{{ scriptSummary }}</text></view>
           <view><text class="label">项目名称</text><textarea :value="form.title" class="field project-title-field" maxlength="100" auto-height @input="$emit('set-title',$event)"></textarea></view>
           <view><text class="label">原始口播文案</text><textarea v-model="form.original_script" class="textarea script-input" :maxlength="-1" @input="$emit('sync-script',$event)"></textarea></view>
           </view>
           <view class="create-section">
-            <view class="create-section-head"><view><text class="section-index">02</text><text class="plan-title">数字人与声音素材</text></view><text class="hint">先选择音频流程，再提交对应参考音频</text></view>
-          <view><text class="label">音频生成流程</text><view class="engine-options"><button class="engine-option" :class="{active:!form.tts_engine||form.tts_engine==='indextts2_legacy'}" @click="form.tts_engine='indextts2_legacy'"><text>IndexTTS2 基础情感版</text><text class="hint">indextts2-basic_emo_api.json · AI 情绪向量</text></button><button class="engine-option" :class="{active:form.tts_engine==='indextts2_voice_clone'}" @click="form.tts_engine='indextts2_voice_clone'"><text>IndexTTS2 音色与情感克隆版</text><text class="hint">indextts2-voice-clone_api.json · 音色＋情感双参考</text></button></view></view>
+            <view class="create-section-head"><view><text class="section-index">02</text><text class="plan-title">数字人与声音素材</text></view><text class="hint">选择声音效果，并上传需要的参考素材</text></view>
+          <view><text class="label">配音方式</text><view class="engine-options"><button class="engine-option" :class="{active:!form.tts_engine||form.tts_engine==='indextts2_legacy'}" @click="form.tts_engine='indextts2_legacy'"><text>情绪参数配音</text><text class="hint">使用参考音色，可在导演方案中调整整体情绪比例</text></button><button class="engine-option" :class="{active:form.tts_engine==='indextts2_voice_clone'}" @click="form.tts_engine='indextts2_voice_clone'"><text>音色与情感参考</text><text class="hint">分别参考说话音色和情绪表达，还原更接近示例的声音</text></button></view></view>
           <view class="uploads">
             <view class="upload-box image-upload" :class="{selected:Boolean(imagePath)}" @click="$emit('choose-image')">
               <image v-if="imagePath" class="upload-preview" :src="imagePath" mode="aspectFill" />
@@ -19,20 +19,20 @@
               <text class="upload-icon">♪</text><text>音色参考音频</text><text v-if="voicePath" class="upload-status">✓ 已选择</text><text class="hint file-name">{{ voiceFileName || '点击选择；不选使用默认音色' }}</text>
             </view>
             <view v-if="form.tts_engine==='indextts2_voice_clone'" class="upload-box emotion-reference" :class="{selected:Boolean(emotionVoicePath)}" @click="$emit('choose-emotion-voice')">
-              <text class="upload-icon">♫</text><text>情感参考音频</text><text v-if="emotionVoicePath" class="upload-status">✓ 已选择</text><text class="hint file-name">{{ emotionVoiceFileName || '新版必选；用于复制语气和情感' }}</text>
+              <text class="upload-icon">♫</text><text>情感参考音频</text><text v-if="emotionVoicePath" class="upload-status">✓ 已选择</text><text class="hint file-name">{{ emotionVoiceFileName || '用于参考说话语气和情绪表达' }}</text>
             </view>
           </view>
           </view>
           <view class="create-section">
             <view class="create-section-head"><view><text class="section-index">03</text><text class="plan-title">执行方式</text></view><text class="setting-state" :class="{ok:form.auto_run}">{{ form.auto_run ? '全自动' : '手动执行' }}</text></view>
-          <checkbox-group class="auto-run-option" @change="$emit('set-auto-run',$event)"><label><checkbox value="auto" :checked="form.auto_run" color="#d7ff68" /><view><text class="auto-run-title">全自动一条龙执行</text><text class="hint">勾选后进入任务队列；AI 导演失败每 3 秒重试，成功后自动生成音频、对齐并生成视频</text></view></label></checkbox-group>
+          <checkbox-group class="auto-run-option" @change="$emit('set-auto-run',$event)"><label><checkbox value="auto" :checked="form.auto_run" color="#d7ff68" /><view><text class="auto-run-title">全自动制作</text><text class="hint">提交后自动完成内容分析、配音、动作设计和视频制作，失败时会自动重试</text></view></label></checkbox-group>
           </view>
           <view class="create-section">
             <view class="create-section-head"><view><text class="section-index">04</text><text class="plan-title">成品后期设置</text></view><text class="hint">默认配置可直接使用，需要精调时再展开</text></view>
             <view class="post-accordion create-accordion">
-              <view class="post-accordion-head" @click="$emit('toggle-panel','bgm')"><view><text class="auto-run-title">背景音乐</text><text class="hint">循环、淡入淡出和人声自动避让</text></view><view class="accordion-meta"><text class="accordion-status" :class="{enabled:form.bgm_enabled}">{{ form.bgm_enabled ? '已开启' : '未开启' }}</text><text class="accordion-arrow">{{ createPanels.bgm ? '▲' : '▼' }}</text></view></view>
+              <view class="post-accordion-head" @click="$emit('toggle-panel','bgm')"><view><text class="auto-run-title">背景音乐</text><text class="hint">自动匹配时长并调节音量，让人声保持清晰</text></view><view class="accordion-meta"><text class="accordion-status" :class="{enabled:form.bgm_enabled}">{{ form.bgm_enabled ? '已开启' : '未开启' }}</text><text class="accordion-arrow">{{ createPanels.bgm ? '▲' : '▼' }}</text></view></view>
               <view v-if="createPanels.bgm" class="post-accordion-body">
-          <checkbox-group class="auto-run-option" @change="$emit('set-bgm-enabled',$event)"><label><checkbox value="bgm" :checked="form.bgm_enabled" color="#d7ff68" /><view><text class="auto-run-title">视频生成后添加背景音乐</text><text class="hint">保留无配乐原视频，并使用本地 FFmpeg 自动循环、淡入淡出和人声避让。</text></view></label></checkbox-group>
+          <checkbox-group class="auto-run-option" @change="$emit('set-bgm-enabled',$event)"><label><checkbox value="bgm" :checked="form.bgm_enabled" color="#d7ff68" /><view><text class="auto-run-title">视频生成后添加背景音乐</text><text class="hint">自动匹配视频时长并调节音乐音量，同时保留无配乐版本。</text></view></label></checkbox-group>
               <view v-if="form.bgm_enabled" class="upload-box" :class="{selected:Boolean(bgmPath)}" @click="$emit('choose-bgm')">
                 <text class="upload-icon">♬</text><text>背景音乐</text><text v-if="bgmPath" class="upload-status">✓ 已选择</text><text class="hint file-name">{{ bgmFileName || '启用配乐后必选；支持 MP3、WAV、M4A、FLAC 等' }}</text>
               </view>
@@ -55,9 +55,9 @@
               </view>
             </view>
             <view class="post-accordion create-accordion">
-              <view class="post-accordion-head" @click="$emit('toggle-panel','subtitle')"><view><text class="auto-run-title">口播字幕</text><text class="hint">使用本地 Whisper 精确时间轴</text></view><view class="accordion-meta"><text class="accordion-status" :class="{enabled:form.subtitle_enabled}">{{ form.subtitle_enabled ? '已开启' : '未开启' }}</text><text class="accordion-arrow">{{ createPanels.subtitle ? '▲' : '▼' }}</text></view></view>
+              <view class="post-accordion-head" @click="$emit('toggle-panel','subtitle')"><view><text class="auto-run-title">口播字幕</text><text class="hint">字幕自动跟随口播内容和节奏</text></view><view class="accordion-meta"><text class="accordion-status" :class="{enabled:form.subtitle_enabled}">{{ form.subtitle_enabled ? '已开启' : '未开启' }}</text><text class="accordion-arrow">{{ createPanels.subtitle ? '▲' : '▼' }}</text></view></view>
               <view v-if="createPanels.subtitle" class="post-accordion-body">
-          <checkbox-group class="auto-run-option" @change="$emit('set-subtitle-enabled',$event)"><label><checkbox value="subtitle" :checked="form.subtitle_enabled" color="#d7ff68" /><view><text class="auto-run-title">视频生成后添加字幕</text><text class="hint">使用本地 Whisper 精确时间轴，保留无字幕原视频。</text></view></label></checkbox-group>
+          <checkbox-group class="auto-run-option" @change="$emit('set-subtitle-enabled',$event)"><label><checkbox value="subtitle" :checked="form.subtitle_enabled" color="#d7ff68" /><view><text class="auto-run-title">视频生成后添加字幕</text><text class="hint">自动生成与口播同步的字幕，同时保留无字幕版本。</text></view></label></checkbox-group>
             <view v-if="form.subtitle_enabled" class="subtitle-preset-bar"><view><text class="auto-run-title">视频号口播字幕</text><text class="hint">粗体 · 64号 · 黑色描边 · 距顶部73% · 单条14字</text></view><button class="ghost small" @click="$emit('apply-subtitle-preset')">应用预设</button></view>
             <view v-if="form.subtitle_enabled" class="subtitle-grid">
               <view><text class="label">字体</text><picker :range="fontOptions" @change="form.subtitle_font_name=fontOptions[$event.detail.value]"><view class="field picker-field">{{ form.subtitle_font_name }}</view></picker></view>
