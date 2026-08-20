@@ -1328,14 +1328,14 @@ class CoreTests(unittest.TestCase):
             Image.new("RGB", (900, 1200), (30, 80, 140)).save(source)
             summary = public_project_summary({"id": "demo", "image_path": str(source)})
             self.assertTrue(summary["has_image"])
-            self.assertTrue(summary["thumbnail_version"])
+            self.assertTrue(summary["thumbnail_version"].startswith("portrait-v2-"))
             result = build_project_thumbnail(source, destination)
             first_mtime = result.stat().st_mtime_ns
             cached = build_project_thumbnail(source, destination)
             self.assertEqual(cached.stat().st_mtime_ns, first_mtime)
             with Image.open(cached) as thumbnail:
                 self.assertEqual(thumbnail.format, "WEBP")
-                self.assertEqual(thumbnail.size, (240, 320))
+                self.assertEqual(thumbnail.size, (270, 480))
 
     def test_completed_video_locks_only_production_stages(self) -> None:
         from app.main import production_stage_locked

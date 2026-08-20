@@ -297,7 +297,7 @@ def public_project_summary(project: dict[str, Any]) -> dict[str, Any]:
     image_path = Path(str(project.get("image_path") or ""))
     has_image = image_path.is_file()
     thumbnail_version = (
-        f"{image_path.stat().st_mtime_ns}-{image_path.stat().st_size}"
+        f"portrait-v2-{image_path.stat().st_mtime_ns}-{image_path.stat().st_size}"
         if has_image
         else ""
     )
@@ -384,7 +384,7 @@ def production_stage_locked(project: dict[str, Any], stage: str) -> bool:
 def build_project_thumbnail(
     source: Path,
     destination: Path,
-    size: tuple[int, int] = (240, 320),
+    size: tuple[int, int] = (270, 480),
 ) -> Path:
     if not source.is_file():
         raise FileNotFoundError(source)
@@ -1282,7 +1282,7 @@ async def project_thumbnail(project_id: str) -> FileResponse:
     if not source.is_file():
         raise HTTPException(404, "项目没有可用的数字人图片")
     project_dir = safe_project_directory(project)
-    destination = project_dir / "cache" / "portrait-240x320.webp"
+    destination = project_dir / "cache" / "portrait-270x480.webp"
     try:
         thumbnail = await asyncio.to_thread(build_project_thumbnail, source, destination)
     except (OSError, ValueError) as exc:
