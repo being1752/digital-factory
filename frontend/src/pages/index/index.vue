@@ -16,7 +16,7 @@
 
 
         <template v-if="viewMode==='projects'&&current">
-          <view class="project-head panel"><view class="project-identity"><text class="eyebrow">PRODUCTION</text><input v-model="current.title" class="project-title-edit" maxlength="100" @blur="saveCurrentTitle" /><text class="hint">{{ current.id }}</text></view><view class="status-box"><text>{{ statusName(current.status) }}</text><view class="progress"><view :style="{width: `${current.progress || 0}%`}"></view></view><text class="hint">{{ durationSummary }}</text></view></view>
+          <view class="project-head panel"><view class="project-head-main"><button class="ghost small project-back" @click="backToProjectLibrary">← 返回项目库</button><view class="project-identity"><text class="eyebrow">PRODUCTION</text><input v-model="current.title" class="project-title-edit" maxlength="100" @blur="saveCurrentTitle" /><text class="hint">{{ current.id }}</text></view></view><view class="status-box"><text>{{ statusName(current.status) }}</text><view class="progress"><view :style="{width: `${current.progress || 0}%`}"></view></view><text class="hint">{{ durationSummary }}</text></view></view>
 
           <ProjectTabs :tabs="projectTabs" :value="projectTab" :has-video="current.has_video" @change="projectTab=$event" />
           <PersistentError :error="current.error" :status="statusName(current.status)" @copy="copyError" @queue="navigateTo('queue')" />
@@ -151,7 +151,8 @@ export default {
       if(!this.realtimeConnected)this.startQueuePolling()
       this.startPolling()
     },
-    navigateTo(mode){this.viewMode=mode;if(mode!=='projects'){clearInterval(this.poll);this.resetAudio();this.resetVideo()}if(mode==='create'){this.current=null;this.createPanels={title:false,subtitle:false,bgm:false}};if(mode==='projects'&&!this.current)this.loadProjects();if(mode==='queue')this.loadTasks()},
+    navigateTo(mode){if(mode==='projects'&&this.viewMode==='projects'&&this.current){this.backToProjectLibrary();return}this.viewMode=mode;if(mode!=='projects'){clearInterval(this.poll);this.resetAudio();this.resetVideo()}if(mode==='create'){this.current=null;this.createPanels={title:false,subtitle:false,bgm:false}};if(mode==='projects'&&!this.current)this.loadProjects();if(mode==='queue')this.loadTasks()},
+    backToProjectLibrary(){clearInterval(this.poll);this.resetAudio();this.resetVideo();this.current=null;this.projectTab='overview';this.postPanels={title:false,subtitle:false};if(!this.projects.length)this.loadProjects()},
     taskProgressText(task){if(task.video_segment_total){const current=Number(task.video_segment_current||0);if(task.video_progress_mode==='http_fallback'&&!current)return '视频生成中 · 精细进度连接恢复中';return current?`视频生成 ${current}/${task.video_segment_total}${task.video_node_max?` · 采样 ${task.video_node_value||0}/${task.video_node_max}`:''}`:'等待 ComfyUI 开始执行'}if(task.queue_position)return `队列第 ${task.queue_position} 位`;return this.taskStageName(task.stage)},
     copyError(error){const value=typeof error==='string'?error:JSON.stringify(error,null,2);uni.setClipboardData({data:value,success:()=>this.toast('错误信息已复制','success')})},
     async connectBackend(){try{this.health=await request('/api/health');await Promise.all([this.loadAppSettings(),this.loadFonts(),this.loadProjects(),this.loadTasks()]);this.startRealtimeUpdates()}catch(e){this.toast(e.message)}},
