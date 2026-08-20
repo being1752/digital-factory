@@ -4,6 +4,7 @@ import asyncio
 import os
 import json
 import shutil
+import re
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,25 @@ def _ass_color(value: str, opacity: int = 100) -> str:
         red, green, blue = 255, 255, 255
     alpha = round(255 * (1 - min(100, max(0, int(opacity))) / 100))
     return f"&H{alpha:02X}{blue:02X}{green:02X}{red:02X}"
+
+
+def subtitle_display_text(value: str) -> str:
+    """Create clean short-video subtitle text without changing alignment text."""
+    source = str(value or "").strip()
+    output: list[str] = []
+    hidden = "，、。；：,.;:"
+    for index, char in enumerate(source):
+        if char not in hidden:
+            output.append(char)
+            continue
+        previous = source[index - 1] if index else ""
+        following = source[index + 1] if index + 1 < len(source) else ""
+        # Preserve numeric punctuation such as 3.5, 1,000 and 12:30.
+        if previous.isdigit() and following.isdigit() and char in ".,:":
+            output.append(char)
+        else:
+            output.append(" ")
+    return re.sub(r"\s+", " ", "".join(output)).strip()
 
 
 def _title_lines(value: str, max_chars: int = 12) -> list[str]:
@@ -107,7 +127,7 @@ class SubtitleDocument:
         for index, cue in enumerate(cues, 1):
             blocks.append(
                 f"{index}\n{_timestamp_srt(cue['start'])} --> {_timestamp_srt(cue['end'])}\n"
-                f"{str(cue['text']).strip()}"
+                f"{subtitle_display_text(cue['text'])}"
             )
         path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
         return path
@@ -115,7 +135,8 @@ class SubtitleDocument:
     @staticmethod
     def write_json(path: Path, cues: list[dict[str, Any]]) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cues, ensure_ascii=False, indent=2), encoding="utf-8")
+        display_cues = [{**cue, "text": subtitle_display_text(cue.get("text", ""))} for cue in cues]
+        path.write_text(json.dumps(display_cues, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
     @staticmethod
@@ -212,7 +233,7 @@ class SubtitleDocument:
                 lines.append(f"Dialogue: 2,{start},{end},Title,,0,0,0,,{text}")
         custom_y = round(height * min(100, max(0, float(settings.get("subtitle_custom_position", 78)))) / 100)
         for cue in cues:
-            text = _ass_text(cue.get("text", ""))
+            text = _ass_text(subtitle_display_text(cue.get("text", "")))
             if position == "custom":
                 text = f"{{\\pos({width // 2},{custom_y})}}{text}"
             start, end = _timestamp_ass(cue["start"]), _timestamp_ass(cue["end"])

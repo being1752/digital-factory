@@ -18,7 +18,7 @@ from app.production_queue import ProductionQueue
 from app.postproduction import BackgroundMusicMixer
 from app.repository import ProjectRepository
 from app.schemas import ProjectCreate
-from app.subtitles import SubtitleDocument
+from app.subtitles import SubtitleDocument, subtitle_display_text
 from app.workflows import TRAIN_VIDEO_OUTPUT_IDS, WorkflowCompiler
 
 
@@ -1266,6 +1266,16 @@ class CoreTests(unittest.TestCase):
             "第一，只收钱、不给支持，",
             "交完钱就没人管；",
         ])
+
+    def test_short_video_subtitle_hides_pause_punctuation(self) -> None:
+        self.assertEqual(
+            subtitle_display_text("第一，只收钱、不给支持，交完钱就没人管；"),
+            "第一 只收钱 不给支持 交完钱就没人管",
+        )
+        self.assertEqual(
+            subtitle_display_text("增长3.5%，金额1,000元，时间12:30！真的吗？"),
+            "增长3.5% 金额1,000元 时间12:30！真的吗？",
+        )
 
     def test_subtitle_document_writes_srt_and_layered_ass(self) -> None:
         cues = [
