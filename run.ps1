@@ -124,7 +124,7 @@ if (-not $BackendOnly) {
 
 Write-Host 'Digital Factory backend:  http://127.0.0.1:8000'
 try {
-    & $pythonExecutable -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+    & $pythonExecutable -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 2
 } finally {
     if ($frontendProcess -and -not $frontendProcess.HasExited) {
         Stop-Process -Id $frontendProcess.Id

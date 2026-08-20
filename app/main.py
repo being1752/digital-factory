@@ -835,14 +835,19 @@ async def list_production_task_summaries(limit: int = 100) -> list[dict[str, Any
 @app.get("/api/events/tasks")
 async def stream_task_events(request: Request) -> StreamingResponse:
     async def stream():
-        yield "retry: 3000\ndata: {\"entity\":\"connected\"}\n\n"
-        async with event_broker.subscribe() as queue:
-            while not await request.is_disconnected():
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=20)
-                    yield EventBroker.encode_sse(event)
-                except asyncio.TimeoutError:
-                    yield ": heartbeat\n\n"
+        try:
+            yield "retry: 3000\ndata: {\"entity\":\"connected\"}\n\n"
+            async with event_broker.subscribe() as queue:
+                while not await request.is_disconnected():
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=20)
+                        yield EventBroker.encode_sse(event)
+                    except asyncio.TimeoutError:
+                        yield ": heartbeat\n\n"
+        except asyncio.CancelledError:
+            # Uvicorn cancels long-lived streams after the short graceful
+            # shutdown window. Treat that as a normal client disconnect.
+            return
 
     return StreamingResponse(
         stream(),
