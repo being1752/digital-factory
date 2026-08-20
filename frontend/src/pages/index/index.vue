@@ -231,13 +231,57 @@ export default {
       try{
         const source=new EventSource(`${getApiBase()}/api/events/tasks`)
         this._eventSource=source
-        source.onopen=()=>{this.realtimeConnected=true;clearTimeout(this.queuePoll)}
+        source.onopen=()=>{this.realtimeConnected=true;clearTimeout(this.queuePoll);clearInterval(this.poll)}
         source.onmessage=event=>{let message={};try{message=JSON.parse(event.data||'{}')}catch(_){}if(message.entity==='connected')return;this.scheduleRealtimeRefresh(message)}
         source.onerror=()=>{this.realtimeConnected=false;this.stopRealtimeUpdates(false);this.startQueuePolling()}
       }catch(_){this.startQueuePolling()}
     },
     stopRealtimeUpdates(reset=true){if(this._eventSource){this._eventSource.close();this._eventSource=null}if(reset)this.realtimeConnected=false},
-    scheduleRealtimeRefresh(message={}){if(!this.pageVisible){this._pendingRealtimeRefresh=true;return}clearTimeout(this._realtimeTimer);this._realtimeTimer=setTimeout(async()=>{try{const payload=message.payload||{};await this.loadTasks();if(this.viewMode==='projects'||message.entity==='project_deleted')await this.loadProjects();const projectId=payload.project_id||payload.id;if(this.current?.id&&projectId===this.current.id)this.current=await request(`/api/projects/${this.current.id}`)}catch(_){}},180)},
+    sortRealtimeTasks(tasks){
+      const rank={RUNNING:0,QUEUED:1,FAILED:2,CANCELLED:3}
+      const sorted=[...tasks].sort((left,right)=>{const status=(rank[left.status]??9)-(rank[right.status]??9);if(status)return status;return String(left.created_at||'').localeCompare(String(right.created_at||''))})
+      let position=0
+      return sorted.map(task=>task.status==='QUEUED'?{...task,queue_position:++position}:{...task,queue_position:null})
+    },
+    applyRealtimeMessage(message={}){
+      const entity=message.entity,payload=message.payload||{}
+      if(entity==='project_deleted'){
+        this.projects=this.projects.filter(item=>item.id!==payload.id)
+        this.tasks=this.tasks.filter(task=>task.project_id!==payload.id)
+        if(this.current?.id===payload.id){this.resetAudio();this.resetVideo();this.current=null}
+        return false
+      }
+      if(entity==='task_deleted'){
+        this.tasks=this.tasks.filter(task=>task.id!==payload.id)
+        return false
+      }
+      if(entity==='task'){
+        if(payload.status==='COMPLETED')this.tasks=this.tasks.filter(task=>task.id!==payload.id)
+        else{
+          const existing=this.tasks.find(task=>task.id===payload.id)
+          const merged=existing?{...existing,...payload}:payload
+          this.tasks=this.sortRealtimeTasks(existing?this.tasks.map(task=>task.id===payload.id?merged:task):[...this.tasks,merged])
+        }
+        return false
+      }
+      if(entity!=='project'||!payload.id)return false
+      const existing=this.projects.find(item=>item.id===payload.id)
+      const merged=existing?{...existing,...payload}:payload
+      this.projects=(existing?this.projects.map(item=>item.id===payload.id?merged:item):[merged,...this.projects]).sort((left,right)=>String(right.updated_at||'').localeCompare(String(left.updated_at||'')))
+      this.tasks=this.tasks.map(task=>task.project_id===payload.id?{...task,project_status:payload.status,project_progress:payload.progress,project_stage_progress:payload.stage_progress,display_status:task.status==='RUNNING'||task.status==='QUEUED'?payload.status:task.display_status,display_progress:payload.progress,video_segment_current:payload.video_segment_current,video_segment_completed:payload.video_segment_completed,video_segment_total:payload.video_segment_total,video_segment_progress:payload.video_segment_progress,error:payload.error||task.error}:task)
+      if(this.current?.id!==payload.id)return false
+      const previousStatus=this.current.status
+      this.current={...this.current,...payload}
+      return Boolean(payload.status&&payload.status!==previousStatus)
+    },
+    scheduleRealtimeRefresh(message={}){
+      if(!this.pageVisible){this._pendingRealtimeRefresh=true;return}
+      const refreshCurrent=this.applyRealtimeMessage(message)
+      if(!refreshCurrent||!this.current?.id)return
+      const projectId=this.current.id
+      clearTimeout(this._realtimeTimer)
+      this._realtimeTimer=setTimeout(async()=>{try{if(this.pageVisible&&this.current?.id===projectId)this.current=await request(`/api/projects/${projectId}`)}catch(_){}},220)
+    },
     startQueuePolling(){clearTimeout(this.queuePoll);if(!this.pageVisible)return;const tick=async()=>{if(this.realtimeConnected||!this.pageVisible)return;try{await this.loadTasks();if(this.viewMode==='projects')await this.loadProjects();if(this.current?.id&&this.tasks.some(task=>task.project_id===this.current.id&&task.status==='RUNNING'))this.current=await request(`/api/projects/${this.current.id}`)}catch(_){}if(!this.pageVisible)return;const busy=this.tasks.some(task=>task.status==='RUNNING');this.queuePoll=setTimeout(tick,busy?5000:12000)};this.queuePoll=setTimeout(tick,1000)},
     setEmotion(name,value){if(!this.current.emotion)this.current.emotion={};this.current.emotion[name]=value/100},
     async saveDirector(){this.current=await request(`/api/projects/${this.current.id}`,{method:'PATCH',data:{script:this.current.script,emotion:this.current.emotion}});this.toast('导演方案已保存','success')},

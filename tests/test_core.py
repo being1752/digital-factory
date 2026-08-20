@@ -1420,6 +1420,25 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(any(entity == "task" for entity, _ in events))
         self.assertTrue(all("original_script" not in payload for _, payload in events))
 
+    def test_realtime_project_event_expands_to_public_summary(self) -> None:
+        from app import main
+
+        project = {
+            "id": "realtime-project",
+            "title": "实时项目",
+            "status": "GENERATING_VIDEO",
+            "progress": 50,
+            "updated_at": "2026-01-01T00:00:00",
+        }
+        with patch.object(main.repository, "get", return_value=project):
+            event = main.public_realtime_event(
+                {"id": 7, "entity": "project", "payload": {"id": project["id"]}}
+            )
+        self.assertEqual(event["id"], 7)
+        self.assertEqual(event["payload"]["title"], "实时项目")
+        self.assertEqual(event["payload"]["status"], "GENERATING_VIDEO")
+        self.assertIn("progress", event["payload"])
+
     def test_event_broker_delivers_compact_sse_event(self) -> None:
         from app.event_stream import EventBroker
 

@@ -339,6 +339,21 @@ def public_task_summary(task: dict[str, Any], queue_position: int | None = None)
     return result
 
 
+def public_realtime_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Expand compact repository notifications into UI-ready SSE summaries."""
+    entity = str(event.get("entity") or "")
+    payload = dict(event.get("payload") or {})
+    if entity == "project":
+        project = repository.get(str(payload.get("id") or ""))
+        if project:
+            payload = public_project_summary(project)
+    elif entity == "task":
+        task = repository.get_task(str(payload.get("id") or ""))
+        if task:
+            payload = public_task_summary(task)
+    return {**event, "payload": payload}
+
+
 AUDIO_LOCKED_TASK_STAGES = {
     "GENERATING_AUDIO",
     "GENERATING_VIDEO",
@@ -841,7 +856,7 @@ async def stream_task_events(request: Request) -> StreamingResponse:
                 while not await request.is_disconnected():
                     try:
                         event = await asyncio.wait_for(queue.get(), timeout=20)
-                        yield EventBroker.encode_sse(event)
+                        yield EventBroker.encode_sse(public_realtime_event(event))
                     except asyncio.TimeoutError:
                         yield ": heartbeat\n\n"
         except asyncio.CancelledError:
