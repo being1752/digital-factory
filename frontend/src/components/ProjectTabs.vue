@@ -1,0 +1,2 @@
+<template><view class="project-tabs panel"><button v-for="tab in tabs" :key="tab.value" class="project-tab" :class="{active:value===tab.value}" @click="$emit('change',tab.value)"><text>{{ tab.label }}</text><text v-if="tab.value==='post'&&hasVideo" class="tab-ready">●</text></button></view></template>
+<script>export default {name:'ProjectTabs',props:{tabs:{type:Array,default:()=>[]},value:{type:String,default:'overview'},hasVideo:Boolean},emits:['change']}</script>

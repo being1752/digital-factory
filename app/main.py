@@ -13,6 +13,7 @@ from typing import Annotated, Any
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from PIL import Image, ImageOps
 
 from .ai_director import AIDirector
 from .alignment import SpeechAlignmentService
@@ -293,6 +294,13 @@ def public_task(task: dict[str, Any], queue_position: int | None = None) -> dict
 
 
 def public_project_summary(project: dict[str, Any]) -> dict[str, Any]:
+    image_path = Path(str(project.get("image_path") or ""))
+    has_image = image_path.is_file()
+    thumbnail_version = (
+        f"{image_path.stat().st_mtime_ns}-{image_path.stat().st_size}"
+        if has_image
+        else ""
+    )
     return {
         "id": project["id"],
         "title": project.get("title", project["id"]),
@@ -303,6 +311,8 @@ def public_project_summary(project: dict[str, Any]) -> dict[str, Any]:
         "created_at": project.get("created_at"),
         "audio_duration": project.get("audio_duration"),
         "segment_count": len(project.get("segments") or []),
+        "has_image": has_image,
+        "thumbnail_version": thumbnail_version,
         "has_audio": bool(project.get("audio_path") and Path(project["audio_path"]).is_file()),
         "has_video": bool(project.get("video_path") and Path(project["video_path"]).is_file()),
         "video_segment_current": project.get("video_segment_current"),
@@ -369,6 +379,28 @@ def production_stage_locked(project: dict[str, Any], stage: str) -> bool:
         bool(value and Path(value).is_file())
         for value in (project.get("raw_video_path"), project.get("video_path"))
     )
+
+
+def build_project_thumbnail(
+    source: Path,
+    destination: Path,
+    size: tuple[int, int] = (240, 320),
+) -> Path:
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    if destination.is_file() and destination.stat().st_mtime_ns >= source.stat().st_mtime_ns:
+        return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.stem}-{uuid.uuid4().hex}.tmp.webp")
+    try:
+        with Image.open(source) as opened:
+            image = ImageOps.exif_transpose(opened).convert("RGB")
+            thumbnail = ImageOps.fit(image, size, method=Image.Resampling.LANCZOS)
+            thumbnail.save(temporary, format="WEBP", quality=68, method=4)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
 
 
 def get_project(project_id: str) -> dict[str, Any]:
@@ -1236,6 +1268,25 @@ async def run_stage(project_id: str, stage: str) -> dict[str, Any]:
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(409, str(exc)) from exc
     return public_project(get_project(project_id))
+
+
+@app.get("/api/projects/{project_id}/thumbnail")
+async def project_thumbnail(project_id: str) -> FileResponse:
+    project = get_project(project_id)
+    source = Path(str(project.get("image_path") or ""))
+    if not source.is_file():
+        raise HTTPException(404, "项目没有可用的数字人图片")
+    project_dir = safe_project_directory(project)
+    destination = project_dir / "cache" / "portrait-240x320.webp"
+    try:
+        thumbnail = await asyncio.to_thread(build_project_thumbnail, source, destination)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(422, f"无法生成项目缩略图：{exc}") from exc
+    return FileResponse(
+        thumbnail,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=86400, immutable"},
+    )
 
 
 @app.get("/api/projects/{project_id}/files/{kind}")

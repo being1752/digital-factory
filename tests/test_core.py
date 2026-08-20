@@ -1272,6 +1272,26 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(ass_text.count("Dialogue: 0,"), 2)
         self.assertEqual(ass_text.count("Dialogue: 1,"), 2)
 
+    def test_project_thumbnail_is_cached_webp_with_fixed_dimensions(self) -> None:
+        from PIL import Image
+        from app.main import build_project_thumbnail, public_project_summary
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "portrait.png"
+            destination = root / "cache" / "portrait.webp"
+            Image.new("RGB", (900, 1200), (30, 80, 140)).save(source)
+            summary = public_project_summary({"id": "demo", "image_path": str(source)})
+            self.assertTrue(summary["has_image"])
+            self.assertTrue(summary["thumbnail_version"])
+            result = build_project_thumbnail(source, destination)
+            first_mtime = result.stat().st_mtime_ns
+            cached = build_project_thumbnail(source, destination)
+            self.assertEqual(cached.stat().st_mtime_ns, first_mtime)
+            with Image.open(cached) as thumbnail:
+                self.assertEqual(thumbnail.format, "WEBP")
+                self.assertEqual(thumbnail.size, (240, 320))
+
     def test_completed_video_locks_only_production_stages(self) -> None:
         from app.main import production_stage_locked
 
