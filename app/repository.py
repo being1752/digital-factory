@@ -7,7 +7,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 
 def now_iso() -> str:
@@ -19,6 +19,7 @@ class ProjectRepository:
         database.parent.mkdir(parents=True, exist_ok=True)
         self.database = database
         self.lock = threading.RLock()
+        self._listeners: list[Callable[[str, dict[str, Any]], None]] = []
         with self._connect() as db:
             db.execute(
                 """
@@ -65,6 +66,22 @@ class ProjectRepository:
                 """
             )
 
+    def add_listener(self, listener: Callable[[str, dict[str, Any]], None]) -> None:
+        self._listeners.append(listener)
+
+    def _notify(self, entity: str, payload: dict[str, Any]) -> None:
+        summary = {
+            key: payload.get(key)
+            for key in ("id", "project_id", "status", "stage", "progress", "updated_at")
+            if key in payload
+        }
+        for listener in tuple(self._listeners):
+            try:
+                listener(entity, summary)
+            except Exception:
+                # UI event delivery must never interrupt persistence.
+                continue
+
     def get_setting(self, key: str, default: str = "") -> str:
         with self.lock, self._connect() as db:
             row = db.execute(
@@ -106,6 +123,7 @@ class ProjectRepository:
                 "INSERT INTO projects(id, created_at, updated_at, payload) VALUES (?, ?, ?, ?)",
                 (project["id"], timestamp, timestamp, json.dumps(project, ensure_ascii=False)),
             )
+        self._notify("project", project)
         return project
 
     def get(self, project_id: str) -> dict[str, Any] | None:
@@ -132,12 +150,16 @@ class ProjectRepository:
                     "UPDATE projects SET updated_at = ?, payload = ? WHERE id = ?",
                     (project["updated_at"], json.dumps(project, ensure_ascii=False), project_id),
                 )
+        self._notify("project", project)
         return project
 
     def delete(self, project_id: str) -> bool:
         with self.lock, self._connect() as db:
             cursor = db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+        if deleted:
+            self._notify("project_deleted", {"id": project_id})
+        return deleted
 
     @staticmethod
     def _task_from_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -240,7 +262,9 @@ class ProjectRepository:
                     json.dumps(payload, ensure_ascii=False),
                 ),
             )
-        return self.get_task(task_id) or payload
+        task = self.get_task(task_id) or payload
+        self._notify("task", task)
+        return task
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self.lock, self._connect() as db:
@@ -296,7 +320,10 @@ class ProjectRepository:
             )
             if cursor.rowcount != 1:
                 return None
-        return self.get_task(row["id"])
+        task = self.get_task(row["id"])
+        if task:
+            self._notify("task", task)
+        return task
 
     def update_task(self, task_id: str, **changes: Any) -> dict[str, Any]:
         allowed = {
@@ -327,6 +354,7 @@ class ProjectRepository:
         task = self.get_task(task_id)
         if not task:
             raise KeyError(task_id)
+        self._notify("task", task)
         return task
 
     def update_task_payload(self, task_id: str, **changes: Any) -> dict[str, Any]:
@@ -354,6 +382,7 @@ class ProjectRepository:
         task = self.get_task(task_id)
         if not task:
             raise KeyError(task_id)
+        self._notify("task", task)
         return task
 
     def recover_running_tasks(self) -> int:
@@ -418,6 +447,7 @@ class ProjectRepository:
             )
             if cursor.rowcount != 1:
                 raise ValueError("任务状态已变化，请刷新后重试")
+        self._notify("task_deleted", {"id": task_id, "project_id": task.get("project_id")})
         return task
 
     def active_tasks_for_project(self, project_id: str) -> list[dict[str, Any]]:

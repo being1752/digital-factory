@@ -1272,14 +1272,27 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(ass_text.count("Dialogue: 0,"), 2)
         self.assertEqual(ass_text.count("Dialogue: 1,"), 2)
 
-    def test_video_title_is_two_colored_lines_for_full_video_duration(self) -> None:
+    def test_completed_video_locks_only_production_stages(self) -> None:
+        from app.main import production_stage_locked
+
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "finished.mp4"
+            video.write_bytes(b"video")
+            project = {"raw_video_path": str(video)}
+            self.assertTrue(production_stage_locked(project, "analyze"))
+            self.assertTrue(production_stage_locked(project, "audio"))
+            self.assertTrue(production_stage_locked(project, "video"))
+            self.assertFalse(production_stage_locked(project, "subtitle"))
+            self.assertFalse(production_stage_locked(project, "bgm"))
+
+    def test_video_title_is_three_uniform_colored_lines_for_full_video_duration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             ass = SubtitleDocument.write_ass(
                 Path(directory) / "title.ass",
-                [{"start": 0.0, "end": 2.0, "text": "测试字幕"}],
+                [{"start": 0.0, "end": 2.0, "text": "\u6d4b\u8bd5\u5b57\u5e55"}],
                 {
                     "video_title_enabled": True,
-                    "video_title": "百万亿健康管理蓝海市场\n机遇就在眼前",
+                    "video_title": "\u7b2c\u4e00\u884c\u6807\u9898\n\u7b2c\u4e8c\u884c\u6807\u9898\n\u7b2c\u4e09\u884c\u6807\u9898\n\u7b2c\u56db\u884c\u4e0d\u4f1a\u663e\u793a",
                     "video_title_font_name": "Microsoft YaHei",
                     "video_title_font_size": 88,
                     "video_title_primary_color": "#FFFFFF",
@@ -1293,14 +1306,13 @@ class CoreTests(unittest.TestCase):
                 video_duration=16.64,
             )
             content = ass.read_text(encoding="utf-8-sig")
-        self.assertIn("Style: Title,Microsoft YaHei,88", content)
-        self.assertIn("Style: TitleAccent,Microsoft YaHei,88,&H004DD8FF", content)
-        self.assertIn(
-            "Dialogue: 2,0:00:00.00,0:00:16.64,Title,,0,0,0,,"
-            "{\\pos(540,192)}百万亿健康管理蓝海市场",
-            content,
-        )
-        self.assertIn("Dialogue: 2,0:00:00.00,0:00:16.64,TitleAccent", content)
+        self.assertIn("Style: Title,Microsoft YaHei,88,&H00FFFFFF", content)
+        self.assertNotIn("TitleAccent", content)
+        self.assertEqual(content.count("Dialogue: 2,"), 3)
+        self.assertIn("{\\pos(540,192)}\u7b2c\u4e00\u884c\u6807\u9898", content)
+        self.assertIn("{\\pos(540,298)}\u7b2c\u4e8c\u884c\u6807\u9898", content)
+        self.assertIn("{\\pos(540,404)}\u7b2c\u4e09\u884c\u6807\u9898", content)
+        self.assertNotIn("\u7b2c\u56db\u884c\u4e0d\u4f1a\u663e\u793a", content)
 
     def test_video_title_suggestion_uses_first_two_script_clauses(self) -> None:
         from app.main import suggest_video_title
@@ -1308,6 +1320,83 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(
             suggest_video_title("百万亿健康管理蓝海市场，机遇就在眼前。后续正文。"),
             "百万亿健康管理蓝海市场\n机遇就在眼前",
+        )
+
+    def test_video_segment_node_map_covers_extended_train(self) -> None:
+        segments = [
+            {
+                "index": index,
+                "start": index * 4,
+                "end": (index + 1) * 4,
+                "spoken_text": f"第{index + 1}段",
+                "action_prompt": "人物对着镜头说话。",
+            }
+            for index in range(10)
+        ]
+        workflow = self.compiler.compile_video("portrait.png", "speech.flac", segments, 42)
+        mapping = self.compiler.video_segment_node_map(workflow, len(segments))
+        self.assertEqual(sorted(mapping.values()), list(range(1, 11)))
+        self.assertEqual(mapping["162"], 1)
+        self.assertEqual(mapping["401"], 6)
+        self.assertEqual(mapping["1035"], 10)
+
+    def test_repository_publishes_project_and_task_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = ProjectRepository(Path(directory) / "events.db")
+            events = []
+            repository.add_listener(lambda entity, payload: events.append((entity, payload)))
+            project = repository.create(
+                {"id": "event-project", "title": "事件测试", "status": "CREATED", "progress": 0}
+            )
+            repository.update(project["id"], status="GENERATING_VIDEO", progress=20)
+            task = repository.enqueue_task(project["id"], repository.get(project["id"]) or project)
+            repository.update_task(task["id"], status="RUNNING", stage="GENERATING_VIDEO")
+        self.assertTrue(any(entity == "project" for entity, _ in events))
+        self.assertTrue(any(entity == "task" for entity, _ in events))
+        self.assertTrue(all("original_script" not in payload for _, payload in events))
+
+    def test_event_broker_delivers_compact_sse_event(self) -> None:
+        from app.event_stream import EventBroker
+
+        async def scenario() -> None:
+            broker = EventBroker()
+            broker.bind_loop(asyncio.get_running_loop())
+            async with broker.subscribe() as queue:
+                broker.publish("project", {"id": "p1", "status": "GENERATING_VIDEO"})
+                event = await asyncio.wait_for(queue.get(), timeout=1)
+                self.assertEqual(event["entity"], "project")
+                self.assertEqual(event["payload"]["id"], "p1")
+                encoded = broker.encode_sse(event)
+                self.assertIn("data:", encoded)
+                self.assertNotIn("original_script", encoded)
+
+        asyncio.run(scenario())
+
+    def test_dynamic_video_progress_uses_train_segment_position(self) -> None:
+        from app.main import project_display_progress, public_project_summary
+
+        project = {
+            "id": "p1",
+            "title": "测试",
+            "status": "GENERATING_VIDEO",
+            "progress": 28,
+            "video_segment_current": 3,
+            "video_segment_total": 11,
+            "video_segment_progress": 0.5,
+            "original_script": "不应该进入摘要" * 100,
+        }
+        overall = project_display_progress(project)
+        self.assertGreater(overall, 40)
+        self.assertLess(overall, 87)
+        summary = public_project_summary(project)
+        self.assertEqual(summary["video_segment_current"], 3)
+        self.assertNotIn("original_script", summary)
+
+    def test_comfyui_websocket_url_preserves_reverse_proxy_path(self) -> None:
+        client = ComfyUIClient("https://example.test/comfy")
+        self.assertEqual(
+            client._websocket_url("client-1"),
+            "wss://example.test/comfy/ws?clientId=client-1",
         )
 
     def _assert_references_exist(self, workflow: dict) -> None:

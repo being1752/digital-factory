@@ -5,3 +5,4 @@ python-multipart>=0.0.20,<1
 pydantic>=2.10,<3
 Pillow>=11,<13
 mutagen>=1.47,<2
+websockets>=14,<17

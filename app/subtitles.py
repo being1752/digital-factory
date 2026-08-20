@@ -45,10 +45,10 @@ def _title_lines(value: str, max_chars: int = 12) -> list[str]:
     chunks: list[str] = []
     for raw_line in source.split("\n"):
         line = "".join(raw_line.split()).strip()
-        while line and len(chunks) < 2:
+        while line and len(chunks) < 3:
             chunks.append(line[:max_chars])
             line = line[max_chars:]
-        if len(chunks) >= 2:
+        if len(chunks) >= 3:
             break
     return chunks
 
@@ -156,7 +156,6 @@ class SubtitleDocument:
         title_font = str(settings.get("video_title_font_name") or "Microsoft YaHei").replace(",", " ")
         title_size = max(18, round(float(settings.get("video_title_font_size", 88)) * width / 1080))
         title_primary = _ass_color(str(settings.get("video_title_primary_color") or "#FFFFFF"))
-        title_secondary = _ass_color(str(settings.get("video_title_secondary_color") or "#FFD84D"))
         title_stroke = _ass_color(str(settings.get("video_title_stroke_color") or "#000000"))
         title_outline = max(0, round(float(settings.get("video_title_stroke_width", 4)) * width / 1080, 2))
         title_y = round(height * min(50, max(0, float(settings.get("video_title_position", 10)))) / 100)
@@ -180,10 +179,9 @@ class SubtitleDocument:
             )
         ]
         if title_enabled:
-            styles.extend([
-                "Style: Title,{font},{size},{primary},{primary},{stroke},&H00000000,-1,0,0,0,100,100,0,0,1,{outline},0,8,20,20,10,1".format(font=title_font,size=title_size,primary=title_primary,stroke=title_stroke,outline=title_outline),
-                "Style: TitleAccent,{font},{size},{primary},{primary},{stroke},&H00000000,-1,0,0,0,100,100,0,0,1,{outline},0,8,20,20,10,1".format(font=title_font,size=title_size,primary=title_secondary,stroke=title_stroke,outline=title_outline),
-            ])
+            styles.append(
+                "Style: Title,{font},{size},{primary},{primary},{stroke},&H00000000,-1,0,0,0,100,100,0,0,1,{outline},0,8,20,20,10,1".format(font=title_font,size=title_size,primary=title_primary,stroke=title_stroke,outline=title_outline)
+            )
         if background_enabled:
             padding = max(4, round(font_size * 0.28))
             styles.append(
@@ -218,9 +216,8 @@ class SubtitleDocument:
             start, end = _timestamp_ass(0), _timestamp_ass(duration)
             line_gap = max(1, round(title_size * 1.2))
             for index, title_line in enumerate(title_lines):
-                style = "Title" if index == 0 else "TitleAccent"
                 text = f"{{\\pos({width // 2},{title_y + index * line_gap})}}{_ass_text(title_line)}"
-                lines.append(f"Dialogue: 2,{start},{end},{style},,0,0,0,,{text}")
+                lines.append(f"Dialogue: 2,{start},{end},Title,,0,0,0,,{text}")
         custom_y = round(height * min(100, max(0, float(settings.get("subtitle_custom_position", 78)))) / 100)
         for cue in cues:
             text = _ass_text(cue.get("text", ""))

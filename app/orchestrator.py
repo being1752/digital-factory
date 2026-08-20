@@ -261,15 +261,81 @@ class TaskRunner:
         )
         workflow_path = self._project_dir(project) / "generated" / "compiled_video.json"
         self._write_json(workflow_path, workflow)
-        prompt_id = await client.submit(workflow)
-        self.repository.update(
-            project_id,
-            status="GENERATING_VIDEO",
-            progress=10,
-            error=None,
-            video_prompt_id=prompt_id,
+        segment_total = len(video_segments)
+        segment_nodes = self.compiler.video_segment_node_map(workflow, segment_total)
+        progress_state = {"last_write": 0.0, "node": None, "value": -1}
+
+        async def on_submitted(prompt_id: str) -> None:
+            self.repository.update(
+                project_id,
+                status="GENERATING_VIDEO",
+                progress=10,
+                error=None,
+                video_prompt_id=prompt_id,
+                video_segment_current=0,
+                video_segment_completed=0,
+                video_segment_total=segment_total,
+                video_segment_progress=0.0,
+                video_segment_nodes=segment_nodes,
+                video_progress_mode="websocket",
+            )
+
+        async def on_progress(event: dict[str, Any]) -> None:
+            event_type = str(event.get("type") or "")
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            if event_type == "connection":
+                self.repository.update(
+                    project_id,
+                    video_progress_mode=str(event.get("mode") or "http_fallback"),
+                    video_progress_note=str(event.get("reason") or ""),
+                )
+                return
+            node_id = str(data.get("node") or "")
+            current = segment_nodes.get(node_id)
+            if not current:
+                return
+            local_progress = 1.0 if event_type == "executed" else 0.0
+            if event_type == "progress":
+                maximum = max(1, int(data.get("max") or 1))
+                local_progress = min(1.0, max(0.0, float(data.get("value") or 0) / maximum))
+            completed = max(0, current - 1)
+            if local_progress >= 1:
+                completed = current
+            stage_progress = round(
+                10 + 80 * min(1.0, ((current - 1) + local_progress) / max(1, segment_total))
+            )
+            loop_time = asyncio.get_running_loop().time()
+            should_write = (
+                event_type != "progress"
+                or progress_state["node"] != node_id
+                or int(data.get("value") or 0) != progress_state["value"]
+                and loop_time - progress_state["last_write"] >= 0.8
+                or local_progress >= 1
+            )
+            if not should_write:
+                return
+            progress_state.update(
+                last_write=loop_time,
+                node=node_id,
+                value=int(data.get("value") or 0),
+            )
+            self.repository.update(
+                project_id,
+                progress=stage_progress,
+                video_segment_current=current,
+                video_segment_completed=completed,
+                video_segment_total=segment_total,
+                video_segment_progress=round(local_progress, 4),
+                video_current_node_id=node_id,
+                video_node_value=int(data.get("value") or 0),
+                video_node_max=int(data.get("max") or 0),
+            )
+
+        prompt_id, history = await client.run_with_progress(
+            workflow,
+            on_submitted=on_submitted,
+            on_progress=on_progress,
         )
-        history = await client.wait(prompt_id)
         await self._save_video_result(project_id, prompt_id, history)
 
     async def resume_video(self, project_id: str) -> None:
@@ -305,6 +371,9 @@ class TaskRunner:
             subtitle_ass_path=None,
             bgm_video_path=None,
             video_prompt_id=prompt_id,
+            video_segment_current=int(project.get("video_segment_total") or 0),
+            video_segment_completed=int(project.get("video_segment_total") or 0),
+            video_segment_progress=1.0,
         )
         project = self._project(project_id)
         if project.get("subtitle_enabled") or project.get("video_title_enabled", False):

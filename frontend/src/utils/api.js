@@ -36,9 +36,9 @@ export function request(path, options = {}) {
   })
 }
 
-export function upload(path, filePath, name = 'file') {
+export function upload(path, filePath, name = 'file', onProgress = null) {
   return new Promise((resolve, reject) => {
-    uni.uploadFile({
+    const task = uni.uploadFile({
       url: `${getApiBase()}${path}`,
       filePath,
       name,
@@ -51,5 +51,8 @@ export function upload(path, filePath, name = 'file') {
       },
       fail(error) { reject(new Error(error.errMsg || '文件上传失败')) }
     })
+    if (onProgress && task?.onProgressUpdate) {
+      task.onProgressUpdate(event => onProgress(Number(event.progress || 0), event))
+    }
   })
 }

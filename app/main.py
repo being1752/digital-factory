@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 import shutil
@@ -8,14 +10,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from .ai_director import AIDirector
 from .alignment import SpeechAlignmentService
 from .comfyui import ComfyUIClient
 from .config import settings
+from .event_stream import EventBroker
 from .orchestrator import TaskRunner
 from .production_queue import ProductionQueue
 from .repository import ProjectRepository
@@ -32,6 +35,7 @@ from .workflows import REQUIRED_VIDEO_NODES, WorkflowCompiler, required_tts_node
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    event_broker.bind_loop(asyncio.get_running_loop())
     await production_queue.start()
     runner.resume_interrupted_videos()
     try:
@@ -49,6 +53,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 repository = ProjectRepository(settings.data_dir / "jobs.db")
+event_broker = EventBroker()
+repository.add_listener(event_broker.publish)
 director = AIDirector(settings)
 aligner = SpeechAlignmentService(settings)
 compiler = WorkflowCompiler(settings.root)
@@ -93,6 +99,13 @@ PROJECT_DISPLAY_PROGRESS = {
 def project_display_progress(project: dict[str, Any]) -> int:
     """Convert per-stage runner progress into one monotonic production percentage."""
     status = str(project.get("status") or "")
+    if status == "GENERATING_VIDEO":
+        total = max(0, int(project.get("video_segment_total") or 0))
+        current = max(0, int(project.get("video_segment_current") or 0))
+        local = min(1.0, max(0.0, float(project.get("video_segment_progress") or 0)))
+        if total:
+            fraction = min(1.0, (max(0, current - 1) + local) / total)
+            return min(87, 40 + round(fraction * 47))
     if status in PROJECT_DISPLAY_PROGRESS:
         return PROJECT_DISPLAY_PROGRESS[status]
     raw = max(0, min(100, int(project.get("progress") or 0)))
@@ -114,17 +127,16 @@ def suggest_video_title(script: str) -> str:
     text = re.sub(r"\s+", "", str(script or "")).strip()
     if not text:
         return ""
-    sentences = [part for part in re.split(r"[。！？!?]+", text) if part]
+    sentences = [part for part in re.split(r"[\u3002\uff01\uff1f!?]+", text) if part]
     first = sentences[0] if sentences else text
-    clauses = [part.strip("，,；;：:") for part in re.split(r"[，,；;：:]", first) if part.strip("，,；;：:")]
-    lines = clauses[:2]
+    clauses = [part.strip("\uff0c,\uff1b;") for part in re.split(r"[\uff0c,\uff1b;]", first) if part.strip("\uff0c,\uff1b;")]
+    lines = clauses[:3]
     if len(lines) == 1 and len(lines[0]) > 12:
         value = lines[0]
-        split_at = min(12, max(6, (len(value) + 1) // 2))
-        lines = [value[:split_at], value[split_at:]]
+        lines = [value[offset : offset + 12] for offset in range(0, min(len(value), 36), 12)]
     if len(lines) == 1 and len(sentences) > 1:
-        lines.append(sentences[1])
-    return "\n".join(line[:12] for line in lines[:2] if line)
+        lines.extend(sentences[1:3])
+    return "\n".join(line[:12] for line in lines[:3] if line)
 
 
 def public_project(project: dict[str, Any]) -> dict[str, Any]:
@@ -256,6 +268,16 @@ def public_task(task: dict[str, Any], queue_position: int | None = None) -> dict
         )
         result["portrait_url"] = f"/api/projects/{task['project_id']}/files/image"
         result["can_edit_script"] = can_edit_task_script(task, project)
+        for key in (
+            "video_segment_current",
+            "video_segment_completed",
+            "video_segment_total",
+            "video_segment_progress",
+            "video_node_value",
+            "video_node_max",
+            "video_progress_mode",
+        ):
+            result[key] = project.get(key)
     else:
         result["display_progress"] = task.get("progress", 0)
         result["original_script"] = (task.get("snapshot") or {}).get(
@@ -267,6 +289,43 @@ def public_task(task: dict[str, Any], queue_position: int | None = None) -> dict
     result["can_delete"] = True
     if queue_position is not None:
         result["queue_position"] = queue_position
+    return result
+
+
+def public_project_summary(project: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": project["id"],
+        "title": project.get("title", project["id"]),
+        "status": project.get("status", "CREATED"),
+        "progress": project_display_progress(project),
+        "stage_progress": max(0, min(100, int(project.get("progress") or 0))),
+        "updated_at": project.get("updated_at"),
+        "created_at": project.get("created_at"),
+        "audio_duration": project.get("audio_duration"),
+        "segment_count": len(project.get("segments") or []),
+        "has_audio": bool(project.get("audio_path") and Path(project["audio_path"]).is_file()),
+        "has_video": bool(project.get("video_path") and Path(project["video_path"]).is_file()),
+        "video_segment_current": project.get("video_segment_current"),
+        "video_segment_completed": project.get("video_segment_completed"),
+        "video_segment_total": project.get("video_segment_total"),
+        "video_segment_progress": project.get("video_segment_progress"),
+        "error": project.get("error"),
+    }
+
+
+def public_task_summary(task: dict[str, Any], queue_position: int | None = None) -> dict[str, Any]:
+    full = public_task(task, queue_position)
+    keys = (
+        "id", "project_id", "project_title", "status", "stage", "progress",
+        "display_status", "display_progress", "status_source", "queue_position",
+        "created_at", "updated_at", "started_at", "completed_at", "error",
+        "project_status", "project_progress", "project_stage_progress",
+        "video_segment_current", "video_segment_completed", "video_segment_total",
+        "video_segment_progress", "video_node_value", "video_node_max",
+        "video_progress_mode", "can_delete",
+    )
+    result = {key: full.get(key) for key in keys if key in full}
+    result["tts_engine"] = (task.get("snapshot") or {}).get("tts_engine")
     return result
 
 
@@ -301,6 +360,15 @@ def can_edit_project_script(project: dict[str, Any]) -> bool:
     if project.get("audio_started") or project.get("audio_path"):
         return False
     return project.get("status") not in AUDIO_LOCKED_PROJECT_STATUSES
+
+
+def production_stage_locked(project: dict[str, Any], stage: str) -> bool:
+    if stage not in {"analyze", "audio", "video"}:
+        return False
+    return any(
+        bool(value and Path(value).is_file())
+        for value in (project.get("raw_video_path"), project.get("video_path"))
+    )
 
 
 def get_project(project_id: str) -> dict[str, Any]:
@@ -658,6 +726,11 @@ async def list_projects() -> list[dict[str, Any]]:
     return [public_project(project) for project in repository.list()]
 
 
+@app.get("/api/projects/summary")
+async def list_project_summaries() -> list[dict[str, Any]]:
+    return [public_project_summary(project) for project in repository.list()]
+
+
 @app.get("/api/projects/{project_id}")
 async def project_detail(project_id: str) -> dict[str, Any]:
     return public_project(get_project(project_id))
@@ -714,6 +787,40 @@ async def list_production_tasks(limit: int = 100) -> list[dict[str, Any]]:
     ]
     positions = {task_id: index + 1 for index, task_id in enumerate(queued_ids)}
     return [public_task(task, positions.get(task["id"])) for task in tasks]
+
+
+@app.get("/api/tasks/summary")
+async def list_production_task_summaries(limit: int = 100) -> list[dict[str, Any]]:
+    tasks = [
+        task for task in repository.list_tasks(max(1, min(limit, 500)))
+        if task["status"] != "COMPLETED"
+    ]
+    queued_ids = [task["id"] for task in tasks if task["status"] == "QUEUED"]
+    positions = {task_id: index + 1 for index, task_id in enumerate(queued_ids)}
+    return [public_task_summary(task, positions.get(task["id"])) for task in tasks]
+
+
+@app.get("/api/events/tasks")
+async def stream_task_events(request: Request) -> StreamingResponse:
+    async def stream():
+        yield "retry: 3000\ndata: {\"entity\":\"connected\"}\n\n"
+        async with event_broker.subscribe() as queue:
+            while not await request.is_disconnected():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=20)
+                    yield EventBroker.encode_sse(event)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/tasks/{task_id}")
@@ -1119,7 +1226,9 @@ async def upload_project_asset(
 
 @app.post("/api/projects/{project_id}/run/{stage}")
 async def run_stage(project_id: str, stage: str) -> dict[str, Any]:
-    get_project(project_id)
+    project = get_project(project_id)
+    if production_stage_locked(project, stage):
+        raise HTTPException(409, "项目已生成成片，不能再执行 AI 导演分析、音频生成或视频生成")
     if repository.active_tasks_for_project(project_id):
         raise HTTPException(409, "项目已在自动生产队列中，不能同时手动执行")
     try:

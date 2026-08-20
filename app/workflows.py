@@ -68,6 +68,7 @@ TTS_MAX_SEED = 2**32 - 1
 
 TRAIN_POSITIVE_INDEX_IDS = ("260", "266", "294", "322", "349", "413")
 TRAIN_VIDEO_OUTPUT_IDS = ("19", "284", "316", "342", "369", "408")
+TRAIN_SAMPLER_IDS = ("162", "281", "307", "335", "362", "401")
 
 
 class WorkflowCompiler:
@@ -279,6 +280,20 @@ class WorkflowCompiler:
             output_ids.append(output_id)
 
         return output_ids
+
+    @staticmethod
+    def video_segment_node_map(
+        workflow: dict[str, Any], segment_count: int
+    ) -> dict[str, int]:
+        """Map executable KSampler node ids to their one-based train car."""
+        node_ids = list(TRAIN_SAMPLER_IDS[: min(segment_count, len(TRAIN_SAMPLER_IDS))])
+        for index in range(len(TRAIN_SAMPLER_IDS), segment_count):
+            node_ids.append(str(1000 + (index - len(TRAIN_SAMPLER_IDS)) * 10 + 5))
+        return {
+            node_id: index + 1
+            for index, node_id in enumerate(node_ids)
+            if node_id in workflow and workflow[node_id].get("class_type") == "KSampler"
+        }
 
     @staticmethod
     def compact_action_prompt(value: str, max_length: int = 36) -> str:

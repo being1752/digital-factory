@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import mimetypes
 import uuid
 from pathlib import Path
-from typing import Any, Iterable
-from urllib.parse import urlparse
+from typing import Any, Awaitable, Callable, Iterable
+from urllib.parse import urlencode, urlparse, urlunparse
 
 import httpx
+import websockets
 
 
 class ComfyUIError(RuntimeError):
@@ -73,8 +75,10 @@ class ComfyUIClient:
         subfolder = result.get("subfolder", "")
         return f"{subfolder}/{name}".lstrip("/") if subfolder else name
 
-    async def submit(self, workflow: dict[str, Any]) -> str:
-        client_id = uuid.uuid4().hex
+    async def submit(
+        self, workflow: dict[str, Any], client_id: str | None = None
+    ) -> str:
+        client_id = client_id or uuid.uuid4().hex
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
                 f"{self.base_url}/prompt", json={"prompt": workflow, "client_id": client_id}
@@ -92,6 +96,102 @@ class ComfyUIClient:
         history = await self.wait(prompt_id)
         return prompt_id, history
 
+    def _websocket_url(self, client_id: str) -> str:
+        parsed = urlparse(self.base_url)
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        path = f"{parsed.path.rstrip('/')}/ws"
+        return urlunparse((scheme, parsed.netloc, path, "", urlencode({"clientId": client_id}), ""))
+
+    @staticmethod
+    async def _emit_progress(
+        callback: Callable[[dict[str, Any]], Any] | None,
+        event: dict[str, Any],
+    ) -> None:
+        if not callback:
+            return
+        try:
+            result = callback(event)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            # Progress reporting is best-effort and must not fail generation.
+            return
+
+    async def run_with_progress(
+        self,
+        workflow: dict[str, Any],
+        on_submitted: Callable[[str], Any] | None = None,
+        on_progress: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Run a prompt with ComfyUI WebSocket events and HTTP history fallback."""
+        client_id = uuid.uuid4().hex
+        prompt_id: str | None = None
+        try:
+            async with websockets.connect(
+                self._websocket_url(client_id),
+                open_timeout=10,
+                close_timeout=5,
+                ping_interval=20,
+                ping_timeout=20,
+                max_size=8 * 1024 * 1024,
+            ) as socket:
+                await self._emit_progress(on_progress, {"type": "connection", "mode": "websocket"})
+                prompt_id = await self.submit(workflow, client_id=client_id)
+                if on_submitted:
+                    submitted_result = on_submitted(prompt_id)
+                    if inspect.isawaitable(submitted_result):
+                        await submitted_result
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + self.timeout_seconds
+                while loop.time() < deadline:
+                    try:
+                        message = await asyncio.wait_for(socket.recv(), timeout=15)
+                    except asyncio.TimeoutError:
+                        # WebSocket heartbeats do not guarantee an execution event.
+                        # Check history occasionally so a missed success cannot hang.
+                        history = await self.history(prompt_id)
+                        if history is not None and history.get("outputs") is not None:
+                            return prompt_id, history
+                        continue
+                    if isinstance(message, bytes):
+                        continue
+                    try:
+                        event = json.loads(message)
+                    except json.JSONDecodeError:
+                        continue
+                    data = event.get("data") if isinstance(event, dict) else None
+                    if not isinstance(data, dict):
+                        data = {}
+                    event_prompt = data.get("prompt_id")
+                    if event_prompt and str(event_prompt) != prompt_id:
+                        continue
+                    await self._emit_progress(on_progress, event)
+                    event_type = str(event.get("type") or "")
+                    if event_type in {"execution_error", "execution_interrupted"}:
+                        cleanup_note = await self.release_memory_after_failure()
+                        raise ComfyUIError(
+                            "ComfyUI 执行失败：\n"
+                            f"{json.dumps(data, ensure_ascii=False, indent=2, default=str)}"
+                            f"\n\n{cleanup_note}"
+                        )
+                    if event_type in {"execution_success", "execution_complete"}:
+                        return prompt_id, await self.wait(prompt_id)
+                raise TimeoutError(f"ComfyUI 任务超时：{prompt_id}")
+        except (ComfyUIError, asyncio.CancelledError, TimeoutError):
+            raise
+        except Exception as exc:
+            await self._emit_progress(
+                on_progress,
+                {"type": "connection", "mode": "http_fallback", "reason": str(exc)},
+            )
+            if prompt_id is None:
+                prompt_id = await self.submit(workflow)
+                if on_submitted:
+                    submitted_result = on_submitted(prompt_id)
+                    if inspect.isawaitable(submitted_result):
+                        await submitted_result
+            return prompt_id, await self.wait(prompt_id)
+
     async def cancel(self, prompt_id: str | None = None) -> None:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(f"{self.base_url}/interrupt")
@@ -101,6 +201,13 @@ class ComfyUIClient:
                     f"{self.base_url}/queue", json={"delete": [prompt_id]}
                 )
                 response.raise_for_status()
+
+    async def history(self, prompt_id: str) -> dict[str, Any] | None:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(f"{self.base_url}/history/{prompt_id}")
+            response.raise_for_status()
+        payload = response.json()
+        return payload.get(prompt_id)
 
     async def wait(self, prompt_id: str) -> dict[str, Any]:
         loop = asyncio.get_running_loop()

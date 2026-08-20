@@ -49,6 +49,7 @@ if ($pythonExecutable -ne $venvPython) {
 }
 
 $frontendProcess = $null
+$frontendReused = $false
 if (-not $BackendOnly) {
     $frontendRoot = Join-Path $projectRoot 'frontend'
     $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
@@ -72,26 +73,53 @@ if (-not $BackendOnly) {
         }
     }
 
-    $logDirectory = Join-Path $projectRoot 'data\logs'
-    New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-    $frontendOutput = Join-Path $logDirectory 'frontend-dev.log'
-    $frontendError = Join-Path $logDirectory 'frontend-dev-error.log'
-    $frontendStart = @{
-        FilePath = $nodeCommand.Source
-        ArgumentList = @($uniCli)
-        WorkingDirectory = $frontendRoot
-        WindowStyle = 'Hidden'
-        RedirectStandardOutput = $frontendOutput
-        RedirectStandardError = $frontendError
-        PassThru = $true
+    $frontendPort = 5173
+    $listener = Get-NetTCPConnection -LocalPort $frontendPort -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($listener) {
+        $owner = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
+        $commandLine = [string]$owner.CommandLine
+        $expectedRoot = [System.IO.Path]::GetFullPath($frontendRoot)
+        $isProjectFrontend = $commandLine.IndexOf($expectedRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+        if ($isProjectFrontend) {
+            try {
+                $response = Invoke-WebRequest -Uri "http://127.0.0.1:$frontendPort" -UseBasicParsing -TimeoutSec 5
+                $frontendReused = $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
+            } catch {
+                $frontendReused = $false
+            }
+        }
+        if (-not $frontendReused) {
+            $ownerName = if ($owner.Name) { $owner.Name } else { 'unknown process' }
+            Write-Error "Frontend port $frontendPort is occupied by PID $($listener.OwningProcess) ($ownerName). Stop that process or free the port, then retry."
+            exit 1
+        }
     }
-    $frontendProcess = Start-Process @frontendStart
-    Start-Sleep -Seconds 2
-    if ($frontendProcess.HasExited) {
-        Write-Error "Frontend failed to start. See $frontendError"
-        exit 1
+
+    if ($frontendReused) {
+        Write-Host "Digital Factory frontend already running: http://127.0.0.1:$frontendPort"
+    } else {
+        $logDirectory = Join-Path $projectRoot 'data\logs'
+        New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+        $frontendOutput = Join-Path $logDirectory 'frontend-dev.log'
+        $frontendError = Join-Path $logDirectory 'frontend-dev-error.log'
+        $frontendStart = @{
+            FilePath = $nodeCommand.Source
+            ArgumentList = @($uniCli)
+            WorkingDirectory = $frontendRoot
+            WindowStyle = 'Hidden'
+            RedirectStandardOutput = $frontendOutput
+            RedirectStandardError = $frontendError
+            PassThru = $true
+        }
+        $frontendProcess = Start-Process @frontendStart
+        Start-Sleep -Seconds 2
+        if ($frontendProcess.HasExited) {
+            Write-Error "Frontend failed to start. See $frontendError"
+            exit 1
+        }
+        Write-Host "Digital Factory frontend: http://127.0.0.1:$frontendPort"
     }
-    Write-Host 'Digital Factory frontend: http://127.0.0.1:5173'
 }
 
 Write-Host 'Digital Factory backend:  http://127.0.0.1:8000'
