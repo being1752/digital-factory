@@ -8,6 +8,44 @@ from .orchestrator import TaskRunner
 from .repository import ProjectRepository, now_iso
 
 
+FROZEN_TASK_INPUT_FIELDS = {
+    "original_script",
+    "purpose",
+    "audience",
+    "requested_style",
+    "tts_engine",
+    "auto_run",
+    "seed",
+    "bgm_enabled",
+    "bgm_volume",
+    "bgm_ducking",
+    "bgm_fade_in",
+    "bgm_fade_out",
+    "subtitle_enabled",
+    "subtitle_font_name",
+    "subtitle_font_size",
+    "subtitle_font_bold",
+    "subtitle_font_color",
+    "subtitle_position",
+    "subtitle_custom_position",
+    "subtitle_stroke_color",
+    "subtitle_stroke_width",
+    "subtitle_background_enabled",
+    "subtitle_background_color",
+    "subtitle_background_opacity",
+    "subtitle_max_chars",
+    "video_title_enabled",
+    "video_title",
+    "video_title_font_name",
+    "video_title_font_size",
+    "video_title_primary_color",
+    "video_title_secondary_color",
+    "video_title_position",
+    "video_title_stroke_color",
+    "video_title_stroke_width",
+}
+
+
 class ProductionQueue:
     """Persistent FIFO queue with one GPU-safe worker."""
 
@@ -121,6 +159,14 @@ class ProductionQueue:
                 self._active_task_id = None
                 self._active_execution = None
 
+    @staticmethod
+    def _analysis_required(project: dict[str, Any]) -> bool:
+        return (
+            bool(project.get("analysis_required"))
+            or not project.get("script")
+            or not project.get("image_analysis")
+        )
+
     async def _execute(self, task: dict[str, Any]) -> None:
         task_id, project_id = task["id"], task["project_id"]
         try:
@@ -133,15 +179,7 @@ class ProductionQueue:
             frozen = {
                 key: value
                 for key, value in (task.get("snapshot") or {}).items()
-                if value is not None
-                and key
-                not in {
-                    "title",
-                    "image_path",
-                    "voice_path",
-                    "emotion_voice_path",
-                    "bgm_path",
-                }
+                if value is not None and key in FROZEN_TASK_INPUT_FIELDS
             }
             if frozen:
                 project = self.repository.update(project_id, **frozen)
@@ -181,7 +219,7 @@ class ProductionQueue:
                 await asyncio.sleep(0.25)
 
             analysis_attempt = 0
-            while not project.get("script") or not project.get("image_analysis"):
+            while self._analysis_required(project):
                 current_task = self.repository.get_task(task_id)
                 if current_task and current_task["status"] == "CANCELLED":
                     self.repository.update(

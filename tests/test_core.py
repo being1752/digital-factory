@@ -925,6 +925,132 @@ class CoreTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_second_tts_workflow_forces_fresh_image_analysis_before_audio(self) -> None:
+        title = '4亿慢病患者，大多数人在"等病来"'
+        script = (
+            '跟你说个数据。国内确诊的慢病患者已经超过4亿，亚健康人群接近10亿。'
+            '但绝大多数人仍在做一件事：等病来了才治。你知道"治未病"的成本，'
+            '大概只有治病的十分之一吗？提前养和预防，比事后救火划算得多。'
+            '可为什么大多数人还是选择等？因为"没病"的时候，人很难感到紧迫。'
+            '这就是健康管理的第一个悖论：最需要行动的时候，恰恰是你感觉没事的时候。'
+            '认同的扣个1。'
+        )
+        image_name = "陈彬.jpg"
+        voice_name = (
+            "奥运冠军郭晶晶谈健康，健康是一种责任 "
+            "#健康观念 #健康生活 #调理 #健康养生 _.mp4.flac"
+        )
+        compiler = self.compiler
+
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                image = root / image_name
+                voice = root / voice_name
+                image.write_bytes(b"image")
+                voice.write_bytes(b"voice")
+                repository = ProjectRepository(root / "jobs.db")
+                repository.create(
+                    {
+                        "id": "health-job",
+                        "title": title,
+                        "original_script": "旧口播稿",
+                        "script": "旧导演稿",
+                        "image_analysis": {"character_description": "旧图片分析"},
+                        "analysis_required": False,
+                        "image_path": str(image),
+                        "voice_path": str(voice),
+                        "emotion_voice_path": str(voice),
+                        "tts_engine": "indextts2_voice_clone",
+                        "auto_run": True,
+                        "subtitle_enabled": False,
+                        "video_title_enabled": False,
+                    }
+                )
+                task = repository.enqueue_task(
+                    "health-job", repository.get("health-job") or {}
+                )
+                repository.update(
+                    "health-job",
+                    original_script=script,
+                    script="",
+                    image_analysis=None,
+                    analysis_required=True,
+                )
+                repository.update_task_payload(
+                    task["id"], original_script=script
+                )
+                running = repository.claim_next_task()
+                self.assertIsNotNone(running)
+                calls: list[str] = []
+
+                class FakeRunner:
+                    async def analyze(self, project_id: str) -> None:
+                        project = repository.get(project_id) or {}
+                        calls.append("analyze")
+                        self_outer.assertEqual(project["original_script"], script)
+                        self_outer.assertEqual(Path(project["image_path"]), image)
+                        repository.update(
+                            project_id,
+                            script=script,
+                            image_analysis={
+                                "character_description": "陈彬人物图片分析完成"
+                            },
+                            analysis_required=False,
+                        )
+
+                    async def generate_audio(self, project_id: str) -> None:
+                        project = repository.get(project_id) or {}
+                        calls.append("audio")
+                        self_outer.assertEqual(
+                            project["tts_engine"], "indextts2_voice_clone"
+                        )
+                        self_outer.assertEqual(Path(project["voice_path"]), voice)
+                        self_outer.assertEqual(
+                            Path(project["emotion_voice_path"]), voice
+                        )
+                        workflow = compiler.compile_tts(
+                            project["script"],
+                            voice.name,
+                            {},
+                            123,
+                            project["tts_engine"],
+                            voice.name,
+                        )
+                        self_outer.assertEqual(
+                            workflow["13"]["inputs"]["audio"], voice.name
+                        )
+                        self_outer.assertEqual(
+                            workflow["15"]["inputs"]["audio"], voice.name
+                        )
+                        output = root / "speech.flac"
+                        output.write_bytes(b"audio")
+                        repository.update(
+                            project_id,
+                            audio_path=str(output),
+                            segments=[{"index": 0}],
+                        )
+
+                    async def generate_video(self, project_id: str) -> None:
+                        calls.append("video")
+                        output = root / "final.mp4"
+                        output.write_bytes(b"video")
+                        repository.update(project_id, video_path=str(output))
+
+                queue = ProductionQueue(
+                    repository, FakeRunner()  # type: ignore[arg-type]
+                )
+                await queue._execute(running or {})
+                completed = repository.get_task(task["id"])
+                self.assertEqual(calls, ["analyze", "audio", "video"])
+                self.assertEqual(completed["status"], "COMPLETED")
+                project = repository.get("health-job") or {}
+                self.assertFalse(project["analysis_required"])
+                self.assertIn("陈彬", project["image_analysis"]["character_description"])
+
+        self_outer = self
+        asyncio.run(scenario())
+
     def test_auto_task_enters_queue_before_assets_finish_uploading(self) -> None:
         async def scenario() -> None:
             with tempfile.TemporaryDirectory() as directory:

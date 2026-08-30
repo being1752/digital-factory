@@ -92,6 +92,7 @@ class TaskRunner:
             status="SCRIPT_READY",
             progress=100,
             error=None,
+            analysis_required=False,
             image_analysis=result["image_analysis"],
             script=result["script"],
             style=result["style"],

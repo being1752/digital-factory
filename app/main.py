@@ -545,6 +545,7 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
             "status": "CREATED",
             "progress": 0,
             "content_revision": 0,
+            "analysis_required": True,
             "audio_started": False,
             "error": None,
             "script": "",
@@ -753,6 +754,7 @@ async def create_project(
             "status": "CREATED",
             "progress": 0,
             "content_revision": 0,
+            "analysis_required": True,
             "audio_started": False,
             "error": None,
             "script": "",
@@ -935,6 +937,7 @@ async def patch_production_task(
                 {
                     "original_script": original_script,
                     "content_revision": int(project.get("content_revision") or 0) + 1,
+                    "analysis_required": True,
                     "script": "",
                     "style": "",
                     "emotion": {},
@@ -1053,6 +1056,7 @@ async def patch_project(project_id: str, patch: ProjectPatch) -> dict[str, Any]:
             changes.update(
                 {
                     "content_revision": int(project.get("content_revision") or 0) + 1,
+                    "analysis_required": True,
                     "script": "",
                     "style": "",
                     "emotion": {},
@@ -1212,6 +1216,7 @@ async def upload_project_asset(
         changes = {
             "image_path": str(destination),
             "status": "CREATED",
+            "analysis_required": True,
             "image_analysis": None,
             "video_path": None,
             "raw_video_path": None,
