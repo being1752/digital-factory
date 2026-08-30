@@ -553,6 +553,78 @@ class CoreTests(unittest.TestCase):
         image_url = director.captured_messages[0]["content"][1]["image_url"]["url"]
         self.assertFalse(image_url.startswith("data:"))
         self.assertEqual(director.captured_options["extra_body"], {"thinking": {"type": "enabled"}})
+        self.assertEqual(director.captured_options["temperature"], 0.1)
+        self.assertTrue(director.captured_options["json_mode"])
+
+    def test_ai_json_parser_repairs_common_missing_commas(self) -> None:
+        payload = AIDirector._parse_json(
+            '```json\n{"image_analysis":{"pose":"正面坐姿"\n"light":"暖光",},\n'
+            '"emotion":{"Happy":0.4}\n"style":"自然"}\n```'
+        )
+        self.assertEqual(payload["image_analysis"]["light"], "暖光")
+        self.assertEqual(payload["emotion"]["Happy"], 0.4)
+        self.assertEqual(payload["style"], "自然")
+
+    def test_ai_json_parser_uses_friendly_format_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "分析结果格式不完整"):
+            AIDirector._parse_json('{"image_analysis": "unfinished"')
+
+    def test_ai_chat_repairs_format_without_resending_image(self) -> None:
+        class FakeResponse:
+            def __init__(self, content: str):
+                self.content = content
+                self.status_code = 200
+                self.text = ""
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {"choices": [{"message": {"content": self.content}}]}
+
+        class FakeClient:
+            def __init__(self):
+                self.requests = []
+                self.responses = [
+                    FakeResponse('{"image_analysis": "unfinished"'),
+                    FakeResponse('{"image_analysis":{"pose":"正面","light":"暖光"}}'),
+                ]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            async def post(self, url, *, headers, json):
+                self.requests.append(json)
+                return self.responses.pop(0)
+
+        client = FakeClient()
+        with patch("app.ai_director.httpx.AsyncClient", return_value=client):
+            result = asyncio.run(
+                AIDirector(settings)._chat(
+                    "glm-test",
+                    [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "analyze"},
+                                {"type": "image_url", "image_url": {"url": "base64-image"}},
+                            ],
+                        }
+                    ],
+                    base_url="https://example.test/v1",
+                    api_key="test-key",
+                    json_mode=True,
+                )
+            )
+        self.assertEqual(result["image_analysis"]["light"], "暖光")
+        self.assertEqual(len(client.requests), 2)
+        self.assertEqual(client.requests[0]["response_format"], {"type": "json_object"})
+        self.assertEqual(client.requests[1]["temperature"], 0)
+        self.assertEqual(client.requests[1]["messages"][0]["role"], "system")
+        self.assertNotIn("image_url", str(client.requests[1]["messages"]))
 
     def test_separated_frontend_api_contract(self) -> None:
         from fastapi.testclient import TestClient

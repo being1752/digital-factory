@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import math
 import mimetypes
 import re
@@ -13,6 +14,13 @@ from PIL import Image
 
 from .config import Settings
 from .schemas import EmotionVector, Segment
+
+
+logger = logging.getLogger(__name__)
+
+
+class AIResponseFormatError(ValueError):
+    """The model returned content that could not be converted to a JSON object."""
 
 
 DEFAULT_ANALYSIS = {
@@ -134,6 +142,8 @@ style；emotion: Happy, Angry, Sad, Fear, Hate, Low, Surprise, Neutral，所有�
             base_url=self.settings.vision_base_url,
             api_key=self.settings.vision_api_key,
             extra_body={"thinking": {"type": "enabled"}} if is_bigmodel_glm_vision else None,
+            temperature=0.1,
+            json_mode=is_bigmodel_glm_vision,
         )
         analysis = {**DEFAULT_ANALYSIS, **result.get("image_analysis", {})}
         emotion = EmotionVector.model_validate(result.get("emotion", {})).model_dump()
@@ -240,46 +250,104 @@ ends_mid_sentence=true 表示句子还会进入下一窗口，结束姿态应当
         base_url: str | None = None,
         api_key: str | None = None,
         extra_body: dict[str, Any] | None = None,
+        temperature: float = 0.35,
+        json_mode: bool = False,
+        format_retries: int = 1,
     ) -> dict[str, Any]:
         request_base_url = (base_url or self.settings.ai_base_url).rstrip("/")
         headers = {"Authorization": f"Bearer {api_key or self.settings.ai_api_key}"}
-        body = {"model": model, "messages": messages, "temperature": 0.35}
-        if extra_body:
-            body.update(extra_body)
+        request_messages = list(messages)
+        retry_count = max(0, int(format_retries))
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                f"{request_base_url}/chat/completions", headers=headers, json=body
-            )
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                detail = response.text.strip()
-                if len(detail) > 1000:
-                    detail = detail[:1000] + "..."
-                raise RuntimeError(
-                    f"AI API 请求失败：HTTP {response.status_code}，"
-                    f"模型 {model}，地址 {request_base_url}。服务端响应：{detail or '<empty>'}"
-                ) from exc
-            content = response.json()["choices"][0]["message"]["content"]
-        if isinstance(content, list):
-            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
-        return self._parse_json(str(content))
+            for format_attempt in range(retry_count + 1):
+                body = {
+                    "model": model,
+                    "messages": request_messages,
+                    "temperature": 0 if format_attempt else temperature,
+                }
+                if json_mode:
+                    body["response_format"] = {"type": "json_object"}
+                if extra_body:
+                    body.update(extra_body)
+                response = await client.post(
+                    f"{request_base_url}/chat/completions", headers=headers, json=body
+                )
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    detail = response.text.strip()
+                    if len(detail) > 1000:
+                        detail = detail[:1000] + "..."
+                    raise RuntimeError(
+                        f"AI API 请求失败：HTTP {response.status_code}，"
+                        f"模型 {model}，地址 {request_base_url}。服务端响应：{detail or '<empty>'}"
+                    ) from exc
+                content = response.json()["choices"][0]["message"]["content"]
+                if isinstance(content, list):
+                    content = "".join(
+                        part.get("text", "")
+                        for part in content
+                        if isinstance(part, dict)
+                    )
+                raw_content = str(content)
+                try:
+                    return self._parse_json(raw_content)
+                except AIResponseFormatError:
+                    if format_attempt >= retry_count:
+                        raise
+                    logger.warning(
+                        "AI returned malformed JSON; requesting format-only repair "
+                        "(model=%s, response_chars=%s)",
+                        model,
+                        len(raw_content),
+                    )
+                    request_messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是 JSON 格式修复器。只能修复下面内容的 JSON 语法，"
+                                "不得改写、删减或补充字段内容，只输出一个合法 JSON 对象。"
+                            ),
+                        },
+                        {"role": "user", "content": raw_content},
+                    ]
+        raise AIResponseFormatError("AI 返回的分析结果格式不完整")
 
     @staticmethod
     def _parse_json(value: str) -> dict[str, Any]:
         value = value.strip()
         value = re.sub(r"^```(?:json)?\s*", "", value, flags=re.I)
         value = re.sub(r"\s*```$", "", value)
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            start, end = value.find("{"), value.rfind("}")
-            if start < 0 or end <= start:
-                raise ValueError("AI 没有返回有效 JSON")
-            parsed = json.loads(value[start : end + 1])
-        if not isinstance(parsed, dict):
-            raise ValueError("AI 返回结果必须是 JSON 对象")
-        return parsed
+        start, end = value.find("{"), value.rfind("}")
+        candidates = [value]
+        if start >= 0 and end > start:
+            candidates.append(value[start : end + 1])
+        candidates.extend(AIDirector._repair_json(candidate) for candidate in list(candidates))
+        last_error: json.JSONDecodeError | None = None
+        for candidate in dict.fromkeys(candidates):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                continue
+            if not isinstance(parsed, dict):
+                raise AIResponseFormatError("AI 返回结果必须是 JSON 对象")
+            return parsed
+        raise AIResponseFormatError("AI 返回的分析结果格式不完整，正在自动重试") from last_error
+
+    @staticmethod
+    def _repair_json(value: str) -> str:
+        """Conservatively repair common punctuation mistakes in model JSON."""
+        repaired = value
+        next_key = r'(?="(?:[^"\\]|\\.)+"\s*:)'
+        repaired = re.sub(rf'("|\}}|\])\s+{next_key}', r"\1, ", repaired)
+        repaired = re.sub(
+            rf'(\b(?:true|false|null)|-?\d+(?:\.\d+)?)(\s+){next_key}',
+            r"\1, ",
+            repaired,
+        )
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+        return repaired
 
     @staticmethod
     def _clean_script(script: str) -> str:
