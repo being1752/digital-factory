@@ -19,7 +19,7 @@ from app.postproduction import BackgroundMusicMixer
 from app.repository import ProjectRepository
 from app.schemas import ProjectCreate
 from app.subtitles import SubtitleDocument, subtitle_display_text
-from app.workflows import TRAIN_VIDEO_OUTPUT_IDS, WorkflowCompiler
+from app.workflows import TRAIN_SAMPLER_IDS, TRAIN_VIDEO_OUTPUT_IDS, WorkflowCompiler
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -202,6 +202,8 @@ class CoreTests(unittest.TestCase):
             graph["254"]["inputs"]["text"] = "<dynamic-prompts>"
             for node_id in ("260", "266", "294", "322", "349", "413"):
                 graph[node_id]["inputs"]["index"] = "<dynamic-index>"
+            for node_id in TRAIN_SAMPLER_IDS:
+                graph[node_id]["inputs"]["seed"] = "<task-seed>"
         self.assertEqual(generated, expected)
 
     def test_eight_car_graph_extends_workflow_one_and_saves_only_final(self) -> None:
@@ -1602,6 +1604,10 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(mapping["162"], 1)
         self.assertEqual(mapping["401"], 6)
         self.assertEqual(mapping["1035"], 10)
+        self.assertEqual(
+            {workflow[node_id]["inputs"]["seed"] for node_id in mapping},
+            {42},
+        )
 
     def test_repository_publishes_project_and_task_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

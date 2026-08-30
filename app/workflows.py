@@ -158,11 +158,14 @@ class WorkflowCompiler:
         )
 
         base_count = len(TRAIN_VIDEO_OUTPUT_IDS)
-        for index in range(min(len(segments), base_count)):
+        active_base_count = min(len(segments), base_count)
+        video_seed = int(seed) % (2**63 - 1)
+        for index in range(active_base_count):
             template[TRAIN_POSITIVE_INDEX_IDS[index]]["inputs"]["index"] = index
+            template[TRAIN_SAMPLER_IDS[index]]["inputs"]["seed"] = video_seed
 
-        # Six cars are the exact verified workflow. Preserve its topology, seeds,
-        # and output scheduling; only project assets and action text are dynamic.
+        # Keep the verified topology and output scheduling, but use one task seed
+        # for every car so adjacent windows do not start from unrelated noise.
         if len(segments) == base_count:
             return template
 
@@ -255,7 +258,7 @@ class WorkflowCompiler:
             workflow[sampler_id] = copy.deepcopy(workflow["401"])
             workflow[sampler_id]["inputs"].update(
                 {
-                    "seed": int(seed + index * 7919) % (2**63 - 1),
+                    "seed": int(seed) % (2**63 - 1),
                     "model": [generator_id, 0],
                     "positive": [generator_id, 1],
                     "negative": [generator_id, 2],
