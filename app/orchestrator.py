@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -505,7 +506,11 @@ class TaskRunner:
         if not background_music.is_file():
             raise ValueError("没有可用的背景音乐文件")
 
-        destination = self._project_dir(project) / "output" / "video_with_bgm.mp4"
+        destination = (
+            self._project_dir(project)
+            / "output"
+            / f"video_with_bgm_{uuid.uuid4().hex[:8]}.mp4"
+        )
         self.repository.update(
             project_id,
             status="MIXING_BGM",

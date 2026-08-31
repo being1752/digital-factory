@@ -43,7 +43,7 @@ class BackgroundMusicMixer:
 
         music_filters = [
             "aformat=sample_rates=48000:channel_layouts=stereo",
-            "loudnorm=I=-20:TP=-2:LRA=7",
+            "loudnorm=I=-14:TP=-1:LRA=7",
             f"volume={volume:.4f}",
         ]
         if fade_in:
@@ -60,9 +60,9 @@ class BackgroundMusicMixer:
                     "[1:a]aformat=sample_rates=48000:channel_layouts=stereo,"
                     "asplit=2[speech_mix][speech_side]",
                     "[music][speech_side]sidechaincompress="
-                    "threshold=0.025:ratio=8:attack=80:release=500[ducked]",
+                    "threshold=0.08:ratio=3:attack=50:release=400[ducked]",
                     "[speech_mix][ducked]amix=inputs=2:duration=first:"
-                    "dropout_transition=2,alimiter=limit=0.891[outa]",
+                    "dropout_transition=2:normalize=0,alimiter=limit=0.891[outa]",
                 ]
             )
         else:
@@ -70,7 +70,7 @@ class BackgroundMusicMixer:
                 [
                     "[1:a]aformat=sample_rates=48000:channel_layouts=stereo[speech]",
                     "[speech][music]amix=inputs=2:duration=first:"
-                    "dropout_transition=2,alimiter=limit=0.891[outa]",
+                    "dropout_transition=2:normalize=0,alimiter=limit=0.891[outa]",
                 ]
             )
 

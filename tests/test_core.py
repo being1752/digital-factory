@@ -243,6 +243,64 @@ class CoreTests(unittest.TestCase):
                 response = asyncio.run(main.project_file("video-job", "video_no_bgm"))
             self.assertTrue(public["has_no_bgm_video"])
             self.assertEqual(Path(response.path), subtitled)
+    def test_rebuilding_bgm_uses_a_new_file_when_previous_video_is_open(self) -> None:
+        from app.orchestrator import TaskRunner
+
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                project_dir = root / "job"
+                output_dir = project_dir / "output"
+                output_dir.mkdir(parents=True)
+                source = output_dir / "video_subtitled.mp4"
+                speech = project_dir / "speech.flac"
+                music = project_dir / "music.mp3"
+                for path in (source, speech, music):
+                    path.write_bytes(b"source")
+                repository = ProjectRepository(root / "jobs.db")
+                repository.create(
+                    {
+                        "id": "bgm-job",
+                        "title": "测试",
+                        "project_dir": str(project_dir),
+                        "subtitle_enabled": True,
+                        "subtitle_video_path": str(source),
+                        "raw_video_path": str(source),
+                        "audio_path": str(speech),
+                        "audio_duration": 5.0,
+                        "bgm_enabled": True,
+                        "bgm_path": str(music),
+                    }
+                )
+                runner = TaskRunner(
+                    settings,
+                    repository,
+                    None,  # type: ignore[arg-type]
+                    None,  # type: ignore[arg-type]
+                    None,  # type: ignore[arg-type]
+                )
+                destinations: list[Path] = []
+
+                class FakeMixer:
+                    async def mix(self, _video, _speech, _music, destination, **_options):
+                        destination.write_bytes(b"mixed")
+                        destinations.append(destination)
+                        return destination
+
+                runner.music_mixer = FakeMixer()  # type: ignore[assignment]
+                await runner.mix_background_music("bgm-job")
+                first = Path((repository.get("bgm-job") or {})["bgm_video_path"])
+                # Keep the first output present, matching a browser that still has it open.
+                await runner.mix_background_music("bgm-job")
+                second = Path((repository.get("bgm-job") or {})["bgm_video_path"])
+                self.assertNotEqual(first, second)
+                self.assertTrue(first.is_file())
+                self.assertTrue(second.is_file())
+                self.assertRegex(first.name, r"^video_with_bgm_[0-9a-f]{8}\.mp4$")
+                self.assertEqual(destinations, [first, second])
+
+        asyncio.run(scenario())
+
     def test_background_music_command_loops_ducks_and_copies_video(self) -> None:
         mixer = BackgroundMusicMixer("python")
         command = mixer.command(
@@ -258,7 +316,9 @@ class CoreTests(unittest.TestCase):
         )
         joined = " ".join(command)
         self.assertIn("-stream_loop -1", joined)
-        self.assertIn("sidechaincompress", joined)
+        self.assertIn("loudnorm=I=-14:TP=-1:LRA=7", joined)
+        self.assertIn("threshold=0.08:ratio=3:attack=50:release=400", joined)
+        self.assertIn("normalize=0", joined)
         self.assertIn("afade=t=in:st=0:d=1.500", joined)
         self.assertIn("afade=t=out:st=10.500:d=2.000", joined)
         self.assertIn("-c:v copy", joined)
