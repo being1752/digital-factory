@@ -9,6 +9,7 @@ EMOTION_KEYS = ("Happy", "Angry", "Sad", "Fear", "Hate", "Low", "Surprise", "Neu
 TTSEngine = Literal["indextts2_legacy", "indextts2_voice_clone"]
 TTS_ENGINES = {"indextts2_legacy", "indextts2_voice_clone"}
 SubtitlePosition = Literal["top", "center", "bottom", "custom"]
+BgmSource = Literal["manual", "library_random"]
 
 
 class EmotionVector(BaseModel):
@@ -103,7 +104,8 @@ class ComfyCheckRequest(BaseModel):
 
 
 class AppSettingsPatch(BaseModel):
-    comfy_url: str
+    comfy_url: str | None = None
+    music_library_path: str | None = None
 
 
 class ProjectCreate(BaseModel):
@@ -118,6 +120,7 @@ class ProjectCreate(BaseModel):
     expect_voice_upload: bool = False
     expect_emotion_voice_upload: bool = False
     bgm_enabled: bool = False
+    bgm_source: BgmSource = "manual"
     bgm_volume: float = Field(default=0.25, ge=0, le=1)
     bgm_ducking: bool = True
     bgm_fade_in: float = Field(default=1.5, ge=0, le=30)

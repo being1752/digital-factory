@@ -41,6 +41,77 @@ DEFAULT_ANALYSIS = {
 }
 
 
+_IMAGE_ANALYSIS_ALIASES = {
+    "character_description": ("character", "person_description"),
+    "clothing_accessories": ("clothing", "outfit", "clothing_description"),
+    "pose_description": ("pose", "posture"),
+    "background_lighting": ("background", "light", "background_and_lighting"),
+    "overall_style": ("style", "overall_visual_style"),
+    "visible_motion_space": ("motion_space", "action_space"),
+    "safe_actions": ("available_actions", "allowed_actions"),
+    "avoid_actions": ("forbidden_actions",),
+}
+_REQUIRED_VISUAL_TEXT_FIELDS = (
+    "character_description",
+    "clothing_accessories",
+    "pose_description",
+    "background_lighting",
+    "overall_style",
+    "visible_motion_space",
+    "shot_type",
+    "visual_style",
+    "baseline_expression",
+    "persona",
+)
+
+
+def normalize_image_analysis(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("视觉模型没有返回 image_analysis 对象")
+    provided = dict(value)
+    for field, aliases in _IMAGE_ANALYSIS_ALIASES.items():
+        if provided.get(field) not in (None, "", []):
+            continue
+        for alias in aliases:
+            if provided.get(alias) not in (None, "", []):
+                provided[field] = provided[alias]
+                break
+    missing = [
+        field
+        for field in _REQUIRED_VISUAL_TEXT_FIELDS
+        if not isinstance(provided.get(field), str) or not provided[field].strip()
+    ]
+    for field in ("safe_actions", "avoid_actions"):
+        actions = provided.get(field)
+        if not isinstance(actions, list) or not any(str(item).strip() for item in actions):
+            missing.append(field)
+    try:
+        motion_level = float(provided.get("motion_level"))
+        if not 0 <= motion_level <= 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        missing.append("motion_level")
+        motion_level = DEFAULT_ANALYSIS["motion_level"]
+    voice = provided.get("voice_suggestion")
+    if not isinstance(voice, dict) or not all(
+        voice.get(field) not in (None, "") for field in ("pace", "energy", "warmth")
+    ):
+        missing.append("voice_suggestion")
+    if missing:
+        raise ValueError(
+            "视觉模型图片分析字段不完整，需要重新分析：" + "、".join(missing)
+        )
+    normalized = {**DEFAULT_ANALYSIS, **provided}
+    normalized["motion_level"] = motion_level
+    normalized["safe_actions"] = [
+        str(item).strip() for item in provided["safe_actions"] if str(item).strip()
+    ]
+    normalized["avoid_actions"] = [
+        str(item).strip() for item in provided["avoid_actions"] if str(item).strip()
+    ]
+    return normalized
+
+
 class AIDirector:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -145,7 +216,7 @@ style；emotion: Happy, Angry, Sad, Fear, Hate, Low, Surprise, Neutral，所有�
             temperature=0.1,
             json_mode=is_bigmodel_glm_vision,
         )
-        analysis = {**DEFAULT_ANALYSIS, **result.get("image_analysis", {})}
+        analysis = normalize_image_analysis(result.get("image_analysis"))
         emotion = EmotionVector.model_validate(result.get("emotion", {})).model_dump()
         return {
             "ai_mode": "model",

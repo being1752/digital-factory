@@ -9,12 +9,13 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from app.ai_director import AIDirector
+from app.ai_director import AIDirector, normalize_image_analysis
 from app.alignment import SpeechAlignmentService
 from app.audio import audio_duration
 from app.config import settings
 from app.comfyui import ComfyUIClient
 from app.production_queue import ProductionQueue
+from app.music_library import available_music_files, copy_random_music
 from app.postproduction import BackgroundMusicMixer
 from app.repository import ProjectRepository
 from app.schemas import ProjectCreate
@@ -23,6 +24,23 @@ from app.workflows import TRAIN_SAMPLER_IDS, TRAIN_VIDEO_OUTPUT_IDS, WorkflowCom
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+COMPLETE_IMAGE_ANALYSIS = {
+    "character_description": "正面人物，神情自然",
+    "clothing_accessories": "浅色上衣，佩戴简洁配饰",
+    "pose_description": "正面坐姿，肩颈放松，双手可见",
+    "background_lighting": "室内背景，正面柔光",
+    "overall_style": "专业亲切的品牌口播风格",
+    "visible_motion_space": "头部、上身和画面内双手均可自然活动",
+    "shot_type": "正面中近景",
+    "visual_style": "自然柔和",
+    "baseline_expression": "自然浅笑",
+    "persona": "专业亲切",
+    "motion_level": 0.45,
+    "voice_suggestion": {"pace": "medium", "energy": 0.6, "warmth": 0.7},
+    "safe_actions": ["自然摆手", "轻微点头"],
+    "avoid_actions": ["手臂伸出画面"],
+}
 
 
 class CoreTests(unittest.TestCase):
@@ -114,6 +132,117 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(project.bgm_ducking)
         self.assertTrue(project.expect_bgm_upload)
 
+    def test_project_create_accepts_random_music_without_upload(self) -> None:
+        project = ProjectCreate(
+            original_script="测试",
+            bgm_enabled=True,
+            bgm_source="library_random",
+            expect_bgm_upload=False,
+        )
+        self.assertEqual(project.bgm_source, "library_random")
+        self.assertFalse(project.expect_bgm_upload)
+
+    def test_create_project_random_music_uses_configured_directory(self) -> None:
+        from app import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library = root / "custom-music"
+            library.mkdir()
+            (library / "selected.mp3").write_bytes(b"selected-music")
+            repository = ProjectRepository(root / "data" / "jobs.db")
+            repository.set_setting("music_library_path", str(library))
+            configured = replace(settings, root=root, data_dir=root / "data")
+            with (
+                patch.object(main, "repository", repository),
+                patch.object(main, "settings", configured),
+            ):
+                project = main.create_default_project(
+                    ProjectCreate(
+                        original_script="测试",
+                        bgm_enabled=True,
+                        bgm_source="library_random",
+                        expect_image_upload=True,
+                        expect_voice_upload=True,
+                    )
+                )
+            self.assertEqual(project["bgm_source"], "library_random")
+            self.assertEqual(project["bgm_name"], "selected.mp3")
+            self.assertEqual(Path(project["bgm_path"]).read_bytes(), b"selected-music")
+
+    def test_random_music_copies_one_supported_file_into_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library = root / "my-music"
+            input_dir = root / "job" / "input"
+            library.mkdir()
+            (library / "a.txt").write_text("ignore", encoding="utf-8")
+            (library / "b.mp3").write_bytes(b"music-b")
+            (library / "c.wav").write_bytes(b"music-c")
+            self.assertEqual([path.name for path in available_music_files(library)], ["b.mp3", "c.wav"])
+            destination, source_name = copy_random_music(
+                library, input_dir, chooser=lambda candidates: candidates[-1]
+            )
+            self.assertEqual(source_name, "c.wav")
+            self.assertEqual(destination.name, "background_music_library.wav")
+            self.assertEqual(destination.read_bytes(), b"music-c")
+
+    def test_image_analysis_normalizes_aliases_and_rejects_missing_details(self) -> None:
+        normalized = normalize_image_analysis(
+            {
+                "character": "人物外观",
+                "clothing": "服饰信息",
+                "pose": "正面坐姿",
+                "background": "室内柔光",
+                "style": "专业风格",
+                "action_space": "手部和上身可活动",
+                "shot_type": "中近景",
+                "visual_style": "自然",
+                "baseline_expression": "浅笑",
+                "persona": "亲切",
+                "motion_level": 0.4,
+                "voice_suggestion": {"pace": "medium", "energy": 0.5, "warmth": 0.7},
+                "available_actions": ["自然摆手"],
+                "forbidden_actions": ["动作超出画面"],
+            }
+        )
+        self.assertEqual(normalized["clothing_accessories"], "服饰信息")
+        self.assertEqual(normalized["visible_motion_space"], "手部和上身可活动")
+        with self.assertRaisesRegex(ValueError, "clothing_accessories"):
+            normalize_image_analysis(
+                {
+                    key: value
+                    for key, value in COMPLETE_IMAGE_ANALYSIS.items()
+                    if key != "clothing_accessories"
+                }
+            )
+
+    def test_no_bgm_download_prefers_subtitled_video(self) -> None:
+        from app import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw.mp4"
+            subtitled = root / "subtitled.mp4"
+            mixed = root / "mixed.mp4"
+            for path in (raw, subtitled, mixed):
+                path.write_bytes(path.name.encode("utf-8"))
+            repository = ProjectRepository(root / "jobs.db")
+            repository.create(
+                {
+                    "id": "video-job",
+                    "title": "测试",
+                    "raw_video_path": str(raw),
+                    "subtitle_video_path": str(subtitled),
+                    "bgm_video_path": str(mixed),
+                    "video_path": str(mixed),
+                }
+            )
+            with patch.object(main, "repository", repository):
+                public = main.public_project(repository.get("video-job") or {})
+                response = asyncio.run(main.project_file("video-job", "video_no_bgm"))
+            self.assertTrue(public["has_no_bgm_video"])
+            self.assertEqual(Path(response.path), subtitled)
     def test_background_music_command_loops_ducks_and_copies_video(self) -> None:
         mixer = BackgroundMusicMixer("python")
         command = mixer.command(
@@ -541,7 +670,7 @@ class CoreTests(unittest.TestCase):
             async def _chat(self, model, messages, **options):
                 self.captured_messages = messages
                 self.captured_options = options
-                return {"script": "测试", "style": "自然", "emotion": {}, "image_analysis": {}}
+                return {"script": "测试", "style": "自然", "emotion": {}, "image_analysis": COMPLETE_IMAGE_ANALYSIS}
 
         director = CapturingDirector(configured)
         with tempfile.TemporaryDirectory() as directory:
@@ -1358,11 +1487,11 @@ class CoreTests(unittest.TestCase):
                     "script": "MODEL REWROTE THE SCRIPT",
                     "style": "natural",
                     "emotion": {},
-                    "image_analysis": {},
+                    "image_analysis": COMPLETE_IMAGE_ANALYSIS,
                 }
 
         locked_script = "Company facts 5 years. Keep every word and number."
-        image_path = next((ROOT / "material").glob("*.png"))
+        image_path = Path(__file__)
         result = asyncio.run(
             RewritingModelDirector(configured).analyze_and_write(
                 image_path, locked_script, "promotion", "audience", "professional"

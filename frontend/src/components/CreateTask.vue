@@ -33,8 +33,15 @@
               <view class="post-accordion-head" @click="$emit('toggle-panel','bgm')"><view><text class="auto-run-title">背景音乐</text><text class="hint">自动匹配时长并调节音量，让人声保持清晰</text></view><view class="accordion-meta"><text class="accordion-status" :class="{enabled:form.bgm_enabled}">{{ form.bgm_enabled ? '已开启' : '未开启' }}</text><text class="accordion-arrow">{{ createPanels.bgm ? '▲' : '▼' }}</text></view></view>
               <view v-if="createPanels.bgm" class="post-accordion-body">
           <checkbox-group class="auto-run-option" @change="$emit('set-bgm-enabled',$event)"><label><checkbox value="bgm" :checked="form.bgm_enabled" color="#d7ff68" /><view><text class="auto-run-title">视频生成后添加背景音乐</text><text class="hint">自动匹配视频时长并调节音乐音量，同时保留无配乐版本。</text></view></label></checkbox-group>
-              <view v-if="form.bgm_enabled" class="upload-box" :class="{selected:Boolean(bgmPath)}" @click="$emit('choose-bgm')">
+              <view v-if="form.bgm_enabled" class="engine-options bgm-source-options">
+                <button class="engine-option" :class="{active:form.bgm_source!=='library_random'}" @click="form.bgm_source='manual'"><text>手动选择音乐</text><text class="hint">从当前设备上传一首指定音乐</text></button>
+                <button class="engine-option" :class="{active:form.bgm_source==='library_random'}" @click="form.bgm_source='library_random'"><text>从音乐文件夹随机</text><text class="hint">提交时由后端从系统设置的文件夹随机选择</text></button>
+              </view>
+              <view v-if="form.bgm_enabled&&form.bgm_source!=='library_random'" class="upload-box" :class="{selected:Boolean(bgmPath)}" @click="$emit('choose-bgm')">
                 <text class="upload-icon">♬</text><text>背景音乐</text><text v-if="bgmPath" class="upload-status">✓ 已选择</text><text class="hint file-name">{{ bgmFileName || '启用配乐后必选；支持 MP3、WAV、M4A、FLAC 等' }}</text>
+              </view>
+              <view v-if="form.bgm_enabled&&form.bgm_source==='library_random'" class="upload-box selected random-music-note">
+                <text class="upload-icon">⤨</text><text>随机配乐已启用</text><text class="hint file-name">任务创建时选定一首并复制到项目中，后续不会中途换歌</text>
               </view>
           <view v-if="form.bgm_enabled" class="bgm-settings">
             <view><text class="label">配乐音量 {{ Math.round(Number(form.bgm_volume || 0) * 100) }}%</text><slider :value="Number(form.bgm_volume || 0) * 100" min="0" max="100" step="1" activeColor="#d7ff68" block-size="14" @changing="form.bgm_volume=$event.detail.value/100"/></view>

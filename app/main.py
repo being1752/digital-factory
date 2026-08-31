@@ -20,6 +20,12 @@ from .alignment import SpeechAlignmentService
 from .comfyui import ComfyUIClient
 from .config import settings
 from .event_stream import EventBroker
+from .music_library import (
+    MusicLibraryError,
+    SUPPORTED_MUSIC_EXTENSIONS,
+    available_music_files,
+    copy_random_music,
+)
 from .orchestrator import TaskRunner
 from .production_queue import ProductionQueue
 from .repository import ProjectRepository
@@ -65,6 +71,15 @@ production_queue = ProductionQueue(repository, runner)
 
 def global_comfy_url() -> str:
     return repository.get_setting("comfy_url", settings.default_comfy_url)
+
+def global_music_library_path() -> Path:
+    configured = repository.get_setting(
+        "music_library_path", str(settings.root / "material" / "music")
+    )
+    candidate = Path(configured).expanduser()
+    if not candidate.is_absolute():
+        candidate = settings.root / candidate
+    return candidate.resolve()
 
 
 PROJECT_DISPLAY_PROGRESS = {
@@ -178,8 +193,13 @@ def public_project(project: dict[str, Any]) -> dict[str, Any]:
     result["has_raw_video"] = exists("raw_video_path") or legacy_raw_video
     result["has_bgm_video"] = exists("bgm_video_path")
     result["has_subtitle_video"] = exists("subtitle_video_path")
+    result["has_no_bgm_video"] = bool(
+        exists("subtitle_video_path") or exists("raw_video_path") or legacy_raw_video
+    )
     result["has_subtitle"] = exists("subtitle_path")
     result.setdefault("bgm_enabled", False)
+    result.setdefault("bgm_source", "manual")
+    result.setdefault("bgm_name", None)
     result.setdefault("bgm_volume", 0.25)
     result.setdefault("bgm_ducking", True)
     result.setdefault("bgm_fade_in", 1.5)
@@ -476,8 +496,12 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
         and not payload.expect_emotion_voice_upload
     ):
         raise HTTPException(422, "IndexTTS2 音色与情感克隆版请选择并上传情感参考音频")
-    if payload.bgm_enabled and not payload.expect_bgm_upload:
-        raise HTTPException(422, "启用视频配乐后请选择并上传背景音乐")
+    if (
+        payload.bgm_enabled
+        and payload.bgm_source == "manual"
+        and not payload.expect_bgm_upload
+    ):
+        raise HTTPException(422, "手动配乐模式下请选择并上传背景音乐")
     project_id = uuid.uuid4().hex[:12]
     project_dir = settings.data_dir / "jobs" / project_id
     input_dir = project_dir / "input"
@@ -485,7 +509,15 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
     image_path = input_dir / f"portrait{image_source.suffix or '.png'}"
     voice_path = input_dir / f"voice{voice_source.suffix or '.m4a'}"
     emotion_voice_path = input_dir / "emotion_voice.m4a"
-    bgm_path = input_dir / "background_music.mp3"
+    bgm_path: Path | None = (
+        input_dir / "background_music.mp3" if payload.bgm_enabled else None
+    )
+    bgm_name: str | None = None
+    if payload.bgm_enabled and payload.bgm_source == "library_random":
+        try:
+            bgm_path, bgm_name = copy_random_music(global_music_library_path(), input_dir)
+        except MusicLibraryError as exc:
+            raise HTTPException(422, str(exc)) from exc
     if image_source.exists() and not payload.expect_image_upload:
         shutil.copyfile(image_source, image_path)
     if voice_source.exists() and not payload.expect_voice_upload:
@@ -515,7 +547,9 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
                 else None
             ),
             "bgm_enabled": payload.bgm_enabled,
-            "bgm_path": str(bgm_path) if payload.bgm_enabled else None,
+            "bgm_source": payload.bgm_source,
+            "bgm_name": bgm_name,
+            "bgm_path": str(bgm_path) if bgm_path else None,
             "bgm_volume": payload.bgm_volume,
             "bgm_ducking": payload.bgm_ducking,
             "bgm_fade_in": payload.bgm_fade_in,
@@ -583,18 +617,35 @@ async def check_comfyui(payload: ComfyCheckRequest) -> dict[str, Any]:
 
 
 @app.get("/api/settings")
-async def get_app_settings() -> dict[str, str]:
-    return {"comfy_url": global_comfy_url()}
+async def get_app_settings() -> dict[str, Any]:
+    library = global_music_library_path()
+    return {
+        "comfy_url": global_comfy_url(),
+        "music_library_path": str(library),
+        "music_library_count": len(available_music_files(library)),
+    }
 
 
 @app.patch("/api/settings")
-async def patch_app_settings(payload: AppSettingsPatch) -> dict[str, str]:
-    try:
-        comfy_url = ComfyUIClient.normalize_url(payload.comfy_url)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    repository.set_setting("comfy_url", comfy_url)
-    return {"comfy_url": comfy_url}
+async def patch_app_settings(payload: AppSettingsPatch) -> dict[str, Any]:
+    if payload.comfy_url is not None:
+        try:
+            comfy_url = ComfyUIClient.normalize_url(payload.comfy_url)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        repository.set_setting("comfy_url", comfy_url)
+    if payload.music_library_path is not None:
+        value = payload.music_library_path.strip()
+        if not value:
+            raise HTTPException(422, "音乐文件夹路径不能为空")
+        library = Path(value).expanduser()
+        if not library.is_absolute():
+            library = settings.root / library
+        library = library.resolve()
+        if not library.is_dir():
+            raise HTTPException(422, f"音乐文件夹不存在：{library}")
+        repository.set_setting("music_library_path", str(library))
+    return await get_app_settings()
 
 
 @app.get("/api/fonts")
@@ -1263,13 +1314,15 @@ async def upload_project_asset(
         }
     elif kind == "bgm":
         suffix = Path(file.filename or "background_music.mp3").suffix.lower()
-        if suffix not in {".wav", ".flac", ".mp3", ".m4a", ".m4s", ".mp4", ".ogg", ".aac"}:
+        if suffix not in SUPPORTED_MUSIC_EXTENSIONS:
             raise HTTPException(422, "背景音乐格式不支持")
         destination = Path(project["project_dir"]) / "input" / f"background_music{suffix}"
         await save_upload(file, destination, 200 * 1024 * 1024)
         source_video = project.get("subtitle_video_path") or project.get("raw_video_path")
         changes = {
             "bgm_enabled": True,
+            "bgm_source": "manual",
+            "bgm_name": Path(file.filename or destination.name).name,
             "bgm_path": str(destination),
             "bgm_video_path": None,
             "video_path": source_video or project.get("video_path"),
@@ -1278,6 +1331,35 @@ async def upload_project_asset(
         }
     else:
         raise HTTPException(404, "未知素材类型")
+    return public_project(repository.update(project_id, **changes))
+
+
+@app.post("/api/projects/{project_id}/bgm/random")
+async def choose_random_project_bgm(project_id: str) -> dict[str, Any]:
+    project = get_project(project_id)
+    if repository.active_tasks_for_project(project_id):
+        raise HTTPException(409, "任务正在队列中执行，暂时不能更换背景音乐")
+    try:
+        destination, source_name = copy_random_music(
+            global_music_library_path(), Path(project["project_dir"]) / "input"
+        )
+    except MusicLibraryError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    source_video = project.get("subtitle_video_path") or project.get("raw_video_path")
+    changes = {
+        "bgm_enabled": True,
+        "bgm_source": "library_random",
+        "bgm_name": source_name,
+        "bgm_path": str(destination),
+        "bgm_video_path": None,
+        "video_path": source_video or project.get("video_path"),
+        "status": (
+            "VIDEO_READY"
+            if source_video and Path(source_video).is_file()
+            else project.get("status", "CREATED")
+        ),
+        "error": None,
+    }
     return public_project(repository.update(project_id, **changes))
 
 
@@ -1317,6 +1399,14 @@ async def project_thumbnail(project_id: str) -> FileResponse:
 @app.get("/api/projects/{project_id}/files/{kind}")
 async def project_file(project_id: str, kind: str) -> FileResponse:
     project = get_project(project_id)
+    if kind == "video_no_bgm":
+        source = project.get("subtitle_video_path") or project.get("raw_video_path")
+        if not source and not project.get("bgm_video_path"):
+            source = project.get("video_path")
+        path = Path(source or "")
+        if not path.is_file():
+            raise HTTPException(404, "无配乐版本不存在")
+        return FileResponse(path, filename=f"{project_id}_无配乐{path.suffix}")
     field = {
         "image": "image_path",
         "voice": "voice_path",
