@@ -48,3 +48,22 @@ def copy_random_music(
     input_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
     return destination, source.name
+
+
+def music_file_by_name(library: Path, name: str) -> Path:
+    """Return a library file by exact basename without allowing path traversal."""
+    candidate_name = Path(str(name or "")).name
+    if not candidate_name or candidate_name != str(name or ""):
+        raise MusicLibraryError("选择的背景音乐无效")
+    for candidate in available_music_files(library):
+        if candidate.name == candidate_name:
+            return candidate
+    raise MusicLibraryError("选择的背景音乐不存在或已被移除")
+
+
+def copy_music_by_name(library: Path, input_dir: Path, name: str) -> tuple[Path, str]:
+    source = music_file_by_name(library, name)
+    destination = input_dir / f"background_music_library{source.suffix.lower()}"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    return destination, source.name

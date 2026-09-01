@@ -88,6 +88,7 @@ class ProjectPatch(BaseModel):
     video_title_font_size: int | None = Field(default=None, ge=24, le=180)
     video_title_primary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     video_title_secondary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    video_title_tertiary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     video_title_position: float | None = Field(default=None, ge=0, le=50)
     video_title_stroke_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     video_title_stroke_width: float | None = Field(default=None, ge=0, le=12)
@@ -119,8 +120,9 @@ class ProjectCreate(BaseModel):
     expect_image_upload: bool = False
     expect_voice_upload: bool = False
     expect_emotion_voice_upload: bool = False
-    bgm_enabled: bool = False
-    bgm_source: BgmSource = "manual"
+    bgm_enabled: bool = True
+    bgm_source: BgmSource = "library_random"
+    bgm_library_name: str | None = Field(default=None, max_length=255)
     bgm_volume: float = Field(default=0.25, ge=0, le=1)
     bgm_ducking: bool = True
     bgm_fade_in: float = Field(default=1.5, ge=0, le=30)
@@ -145,6 +147,7 @@ class ProjectCreate(BaseModel):
     video_title_font_size: int = Field(default=88, ge=24, le=180)
     video_title_primary_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$")
     video_title_secondary_color: str = Field(default="#FFD84D", pattern=r"^#[0-9A-Fa-f]{6}$")
+    video_title_tertiary_color: str = Field(default="#7DE3FF", pattern=r"^#[0-9A-Fa-f]{6}$")
     video_title_position: float = Field(default=10, ge=0, le=50)
     video_title_stroke_color: str = Field(default="#000000", pattern=r"^#[0-9A-Fa-f]{6}$")
     video_title_stroke_width: float = Field(default=4, ge=0, le=12)

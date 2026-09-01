@@ -40,6 +40,7 @@ FROZEN_TASK_INPUT_FIELDS = {
     "video_title_font_size",
     "video_title_primary_color",
     "video_title_secondary_color",
+    "video_title_tertiary_color",
     "video_title_position",
     "video_title_stroke_color",
     "video_title_stroke_width",

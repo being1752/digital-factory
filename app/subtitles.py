@@ -169,6 +169,11 @@ class SubtitleDocument:
         title_font = str(settings.get("video_title_font_name") or "Microsoft YaHei").replace(",", " ")
         title_size = max(18, round(float(settings.get("video_title_font_size", 88)) * width / 1080))
         title_primary = _ass_color(str(settings.get("video_title_primary_color") or "#FFFFFF"))
+        title_colors = (
+            title_primary,
+            _ass_color(str(settings.get("video_title_secondary_color") or "#FFD84D")),
+            _ass_color(str(settings.get("video_title_tertiary_color") or "#7DE3FF")),
+        )
         title_stroke = _ass_color(str(settings.get("video_title_stroke_color") or "#000000"))
         title_outline = max(0, round(float(settings.get("video_title_stroke_width", 4)) * width / 1080, 2))
         title_y = round(height * min(50, max(0, float(settings.get("video_title_position", 10)))) / 100)
@@ -229,7 +234,10 @@ class SubtitleDocument:
             start, end = _timestamp_ass(0), _timestamp_ass(duration)
             line_gap = max(1, round(title_size * 1.2))
             for index, title_line in enumerate(title_lines):
-                text = f"{{\\pos({width // 2},{title_y + index * line_gap})}}{_ass_text(title_line)}"
+                text = (
+                    f"{{\\pos({width // 2},{title_y + index * line_gap})"
+                    f"\\1c{title_colors[index]}}}{_ass_text(title_line)}"
+                )
                 lines.append(f"Dialogue: 2,{start},{end},Title,,0,0,0,,{text}")
         custom_y = round(height * min(100, max(0, float(settings.get("subtitle_custom_position", 78)))) / 100)
         for cue in cues:

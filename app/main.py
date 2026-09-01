@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import secrets
 import shutil
 import uuid
 from contextlib import asynccontextmanager
@@ -24,7 +25,9 @@ from .music_library import (
     MusicLibraryError,
     SUPPORTED_MUSIC_EXTENSIONS,
     available_music_files,
+    copy_music_by_name,
     copy_random_music,
+    music_file_by_name,
 )
 from .orchestrator import TaskRunner
 from .production_queue import ProductionQueue
@@ -218,12 +221,12 @@ def public_project(project: dict[str, Any]) -> dict[str, Any]:
     result.setdefault("subtitle_background_opacity", 40)
     result.setdefault("subtitle_max_chars", 14)
     result.setdefault("video_title_enabled", True)
-    if not str(result.get("video_title") or "").strip():
-        result["video_title"] = suggest_video_title(project.get("original_script") or project.get("script") or "")
+    result.setdefault("video_title", "")
     result.setdefault("video_title_font_name", "Microsoft YaHei")
     result.setdefault("video_title_font_size", 88)
     result.setdefault("video_title_primary_color", "#FFFFFF")
     result.setdefault("video_title_secondary_color", "#FFD84D")
+    result.setdefault("video_title_tertiary_color", "#7DE3FF")
     result.setdefault("video_title_position", 10)
     result.setdefault("video_title_stroke_color", "#000000")
     result.setdefault("video_title_stroke_width", 4)
@@ -515,7 +518,12 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
     bgm_name: str | None = None
     if payload.bgm_enabled and payload.bgm_source == "library_random":
         try:
-            bgm_path, bgm_name = copy_random_music(global_music_library_path(), input_dir)
+            if payload.bgm_library_name:
+                bgm_path, bgm_name = copy_music_by_name(
+                    global_music_library_path(), input_dir, payload.bgm_library_name
+                )
+            else:
+                bgm_path, bgm_name = copy_random_music(global_music_library_path(), input_dir)
         except MusicLibraryError as exc:
             raise HTTPException(422, str(exc)) from exc
     if image_source.exists() and not payload.expect_image_upload:
@@ -568,11 +576,12 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
             "subtitle_background_opacity": payload.subtitle_background_opacity,
             "subtitle_max_chars": payload.subtitle_max_chars,
             "video_title_enabled": payload.video_title_enabled,
-            "video_title": payload.video_title.strip() or suggest_video_title(payload.original_script),
+            "video_title": payload.video_title.strip(),
             "video_title_font_name": payload.video_title_font_name,
             "video_title_font_size": payload.video_title_font_size,
             "video_title_primary_color": payload.video_title_primary_color,
             "video_title_secondary_color": payload.video_title_secondary_color,
+            "video_title_tertiary_color": payload.video_title_tertiary_color,
             "video_title_position": payload.video_title_position,
             "video_title_stroke_color": payload.video_title_stroke_color,
             "video_title_stroke_width": payload.video_title_stroke_width,
@@ -624,6 +633,28 @@ async def get_app_settings() -> dict[str, Any]:
         "music_library_path": str(library),
         "music_library_count": len(available_music_files(library)),
     }
+
+
+@app.post("/api/music/random")
+async def choose_random_music_preview() -> dict[str, str]:
+    candidates = available_music_files(global_music_library_path())
+    if not candidates:
+        raise HTTPException(422, "指定的音乐文件夹不存在或没有支持的音乐文件")
+    return {"name": secrets.choice(candidates).name}
+
+
+@app.get("/api/music/preview")
+async def preview_library_music(name: str) -> FileResponse:
+    try:
+        source = music_file_by_name(global_music_library_path(), name)
+    except MusicLibraryError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(
+        source,
+        filename=source.name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.patch("/api/settings")
@@ -698,6 +729,7 @@ async def create_project(
     video_title_font_size: Annotated[int, Form()] = 88,
     video_title_primary_color: Annotated[str, Form()] = "#FFFFFF",
     video_title_secondary_color: Annotated[str, Form()] = "#FFD84D",
+    video_title_tertiary_color: Annotated[str, Form()] = "#7DE3FF",
     video_title_position: Annotated[float, Form()] = 10,
     video_title_stroke_color: Annotated[str, Form()] = "#000000",
     video_title_stroke_width: Annotated[float, Form()] = 4,
@@ -794,11 +826,12 @@ async def create_project(
             "subtitle_background_opacity": min(100, max(0, subtitle_background_opacity)),
             "subtitle_max_chars": min(32, max(6, subtitle_max_chars)),
             "video_title_enabled": video_title_enabled,
-            "video_title": video_title.strip() or suggest_video_title(original_script),
+            "video_title": video_title.strip(),
             "video_title_font_name": video_title_font_name.strip() or "Microsoft YaHei",
             "video_title_font_size": min(180, max(24, video_title_font_size)),
             "video_title_primary_color": video_title_primary_color,
             "video_title_secondary_color": video_title_secondary_color,
+            "video_title_tertiary_color": video_title_tertiary_color,
             "video_title_position": min(50, max(0, video_title_position)),
             "video_title_stroke_color": video_title_stroke_color,
             "video_title_stroke_width": min(12, max(0, video_title_stroke_width)),
@@ -1218,6 +1251,7 @@ async def patch_project(project_id: str, patch: ProjectPatch) -> dict[str, Any]:
         "video_title_font_size",
         "video_title_primary_color",
         "video_title_secondary_color",
+        "video_title_tertiary_color",
         "video_title_position",
         "video_title_stroke_color",
         "video_title_stroke_width",

@@ -15,7 +15,12 @@ from app.audio import audio_duration
 from app.config import settings
 from app.comfyui import ComfyUIClient
 from app.production_queue import ProductionQueue
-from app.music_library import available_music_files, copy_random_music
+from app.music_library import (
+    MusicLibraryError,
+    available_music_files,
+    copy_music_by_name,
+    copy_random_music,
+)
 from app.postproduction import BackgroundMusicMixer
 from app.repository import ProjectRepository
 from app.schemas import ProjectCreate
@@ -114,6 +119,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(legacy.tts_engine, "indextts2_legacy")
         self.assertEqual(clone.tts_engine, "indextts2_voice_clone")
         self.assertFalse(legacy.auto_run)
+        self.assertTrue(legacy.bgm_enabled)
+        self.assertEqual(legacy.bgm_source, "library_random")
         self.assertTrue(clone.auto_run)
         self.assertTrue(clone.expect_emotion_voice_upload)
 
@@ -186,6 +193,21 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(source_name, "c.wav")
             self.assertEqual(destination.name, "background_music_library.wav")
             self.assertEqual(destination.read_bytes(), b"music-c")
+
+    def test_named_music_preview_selection_is_safe_and_repeatable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library = root / "music"
+            input_dir = root / "job" / "input"
+            library.mkdir()
+            (library / "selected.mp3").write_bytes(b"previewed-music")
+            destination, source_name = copy_music_by_name(
+                library, input_dir, "selected.mp3"
+            )
+            self.assertEqual(source_name, "selected.mp3")
+            self.assertEqual(destination.read_bytes(), b"previewed-music")
+            with self.assertRaises(MusicLibraryError):
+                copy_music_by_name(library, input_dir, "../selected.mp3")
 
     def test_image_analysis_normalizes_aliases_and_rejects_missing_details(self) -> None:
         normalized = normalize_image_analysis(
@@ -1739,7 +1761,7 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(production_stage_locked(project, "subtitle"))
             self.assertFalse(production_stage_locked(project, "bgm"))
 
-    def test_video_title_is_three_uniform_colored_lines_for_full_video_duration(self) -> None:
+    def test_video_title_supports_three_line_colors_for_full_video_duration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             ass = SubtitleDocument.write_ass(
                 Path(directory) / "title.ass",
@@ -1751,6 +1773,7 @@ class CoreTests(unittest.TestCase):
                     "video_title_font_size": 88,
                     "video_title_primary_color": "#FFFFFF",
                     "video_title_secondary_color": "#FFD84D",
+                    "video_title_tertiary_color": "#7DE3FF",
                     "video_title_position": 10,
                     "video_title_stroke_color": "#000000",
                     "video_title_stroke_width": 4,
@@ -1763,9 +1786,9 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Style: Title,Microsoft YaHei,88,&H00FFFFFF", content)
         self.assertNotIn("TitleAccent", content)
         self.assertEqual(content.count("Dialogue: 2,"), 3)
-        self.assertIn("{\\pos(540,192)}\u7b2c\u4e00\u884c\u6807\u9898", content)
-        self.assertIn("{\\pos(540,298)}\u7b2c\u4e8c\u884c\u6807\u9898", content)
-        self.assertIn("{\\pos(540,404)}\u7b2c\u4e09\u884c\u6807\u9898", content)
+        self.assertIn("{\\pos(540,192)\\1c&H00FFFFFF}\u7b2c\u4e00\u884c\u6807\u9898", content)
+        self.assertIn("{\\pos(540,298)\\1c&H004DD8FF}\u7b2c\u4e8c\u884c\u6807\u9898", content)
+        self.assertIn("{\\pos(540,404)\\1c&H00FFE37D}\u7b2c\u4e09\u884c\u6807\u9898", content)
         self.assertNotIn("\u7b2c\u56db\u884c\u4e0d\u4f1a\u663e\u793a", content)
 
     def test_video_title_suggestion_uses_first_two_script_clauses(self) -> None:
