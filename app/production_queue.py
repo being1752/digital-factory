@@ -267,8 +267,8 @@ class ProductionQueue:
             audio_ready = bool(
                 project.get("audio_path")
                 and Path(project["audio_path"]).is_file()
-                and project.get("segments")
             )
+            action_plan_ready = bool(project.get("segments"))
             current_task = self.repository.get_task(task_id)
             if not current_task or current_task["status"] == "CANCELLED":
                 return
@@ -277,6 +277,15 @@ class ProductionQueue:
                     task_id, stage="GENERATING_AUDIO", progress=25, error=None
                 )
                 await self.runner.generate_audio(project_id)
+                project = self.repository.get(project_id) or project
+            elif not action_plan_ready:
+                # TTS may already have succeeded before Whisper alignment or the
+                # AI action planner failed. Keep the expensive audio artifact and
+                # resume from alignment/planning instead of synthesizing it again.
+                self.repository.update_task(
+                    task_id, stage="PLANNING_ACTIONS", progress=45, error=None
+                )
+                await self.runner.align_audio(project_id)
                 project = self.repository.get(project_id) or project
 
             current_task = self.repository.get_task(task_id)

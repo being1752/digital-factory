@@ -1338,6 +1338,69 @@ class CoreTests(unittest.TestCase):
         self_outer = self
         asyncio.run(scenario())
 
+    def test_retry_reuses_audio_when_action_planning_failed(self) -> None:
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                image = root / "portrait.png"
+                voice = root / "voice.wav"
+                audio = root / "speech.flac"
+                image.write_bytes(b"image")
+                voice.write_bytes(b"voice")
+                audio.write_bytes(b"generated audio")
+                repository = ProjectRepository(root / "jobs.db")
+                repository.create(
+                    {
+                        "id": "resume-job",
+                        "title": "resume-job",
+                        "original_script": "script",
+                        "script": "script",
+                        "image_analysis": {"character": "test"},
+                        "analysis_required": False,
+                        "image_path": str(image),
+                        "voice_path": str(voice),
+                        "audio_path": str(audio),
+                        "segments": [],
+                        "auto_run": True,
+                        "subtitle_enabled": False,
+                        "video_title_enabled": False,
+                    }
+                )
+                queued = repository.enqueue_task(
+                    "resume-job", repository.get("resume-job") or {}
+                )
+                repository.update_task(
+                    queued["id"], status="FAILED", stage="FAILED"
+                )
+                repository.retry_task(queued["id"])
+                running = repository.claim_next_task()
+                calls: list[str] = []
+
+                class FakeRunner:
+                    async def generate_audio(self, project_id: str) -> None:
+                        raise AssertionError("existing audio must not be regenerated")
+
+                    async def align_audio(self, project_id: str) -> None:
+                        calls.append("align")
+                        repository.update(project_id, segments=[{"index": 0}])
+
+                    async def generate_video(self, project_id: str) -> None:
+                        calls.append("video")
+                        output = root / "final.mp4"
+                        output.write_bytes(b"video")
+                        repository.update(project_id, video_path=str(output))
+
+                queue = ProductionQueue(
+                    repository, FakeRunner()  # type: ignore[arg-type]
+                )
+                await queue._execute(running or {})
+                completed = repository.get_task(queued["id"])
+                self.assertEqual(calls, ["align", "video"])
+                self.assertEqual(completed["status"], "COMPLETED")
+                self.assertEqual(Path(repository.get("resume-job")["audio_path"]), audio)
+
+        asyncio.run(scenario())
+
     def test_auto_task_enters_queue_before_assets_finish_uploading(self) -> None:
         async def scenario() -> None:
             with tempfile.TemporaryDirectory() as directory:
