@@ -58,11 +58,26 @@ _REQUIRED_VISUAL_TEXT_FIELDS = (
     "background_lighting",
     "overall_style",
     "visible_motion_space",
-    "shot_type",
-    "visual_style",
-    "baseline_expression",
-    "persona",
 )
+
+
+def _ratio(value: Any, fallback: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if 0 <= number <= 1 else fallback
+
+
+def _shot_type_from_description(pose: str, motion_space: str) -> str:
+    description = f"{pose} {motion_space}"
+    if "全身" in description:
+        return "全身景"
+    if any(word in description for word in ("半身", "上半身", "腰部")):
+        return "半身中景"
+    if any(word in description for word in ("近景", "胸部", "肩部", "手部不可见")):
+        return "人物中近景"
+    return "以人物为主体的正面镜头"
 
 
 def normalize_image_analysis(value: Any) -> dict[str, Any]:
@@ -81,34 +96,61 @@ def normalize_image_analysis(value: Any) -> dict[str, Any]:
         for field in _REQUIRED_VISUAL_TEXT_FIELDS
         if not isinstance(provided.get(field), str) or not provided[field].strip()
     ]
-    for field in ("safe_actions", "avoid_actions"):
-        actions = provided.get(field)
-        if not isinstance(actions, list) or not any(str(item).strip() for item in actions):
-            missing.append(field)
-    try:
-        motion_level = float(provided.get("motion_level"))
-        if not 0 <= motion_level <= 1:
-            raise ValueError
-    except (TypeError, ValueError):
-        missing.append("motion_level")
-        motion_level = DEFAULT_ANALYSIS["motion_level"]
-    voice = provided.get("voice_suggestion")
-    if not isinstance(voice, dict) or not all(
-        voice.get(field) not in (None, "") for field in ("pace", "energy", "warmth")
-    ):
-        missing.append("voice_suggestion")
     if missing:
         raise ValueError(
-            "视觉模型图片分析字段不完整，需要重新分析：" + "、".join(missing)
+            "视觉模型核心图片分析字段不完整，需要重新分析：" + "、".join(missing)
         )
+
+    pose = str(provided["pose_description"]).strip()
+    motion_space = str(provided["visible_motion_space"]).strip()
+    overall_style = str(provided["overall_style"]).strip()
+    character = str(provided["character_description"]).strip()
     normalized = {**DEFAULT_ANALYSIS, **provided}
-    normalized["motion_level"] = motion_level
+    normalized["shot_type"] = (
+        str(provided.get("shot_type") or "").strip()
+        or _shot_type_from_description(pose, motion_space)
+    )
+    normalized["visual_style"] = (
+        str(provided.get("visual_style") or "").strip() or overall_style
+    )
+    normalized["baseline_expression"] = (
+        str(provided.get("baseline_expression") or "").strip()
+        or f"保持图片中的自然基础表情：{character}"
+    )
+    normalized["persona"] = str(provided.get("persona") or "").strip() or overall_style
+
+    actions = provided.get("safe_actions")
+    if not isinstance(actions, list) or not any(str(item).strip() for item in actions):
+        actions = [
+            f"保持{pose}的基础姿态，在{motion_space}范围内自然配合口播",
+            "根据语义进行自然的眼神、表情及画面内可见肢体动作",
+        ]
     normalized["safe_actions"] = [
-        str(item).strip() for item in provided["safe_actions"] if str(item).strip()
+        str(item).strip() for item in actions if str(item).strip()
     ]
+
+    avoid = provided.get("avoid_actions")
+    if not isinstance(avoid, list) or not any(str(item).strip() for item in avoid):
+        avoid = [
+            f"超出图片所示动作空间的动作：{motion_space}",
+            f"与原始姿势无法连续衔接的突然大幅动作：{pose}",
+        ]
     normalized["avoid_actions"] = [
-        str(item).strip() for item in provided["avoid_actions"] if str(item).strip()
+        str(item).strip() for item in avoid if str(item).strip()
     ]
+
+    limited = any(word in motion_space for word in ("有限", "不可见", "受限", "局部"))
+    normalized["motion_level"] = _ratio(
+        provided.get("motion_level"), 0.3 if limited else 0.45
+    )
+    voice = provided.get("voice_suggestion")
+    if not isinstance(voice, dict):
+        voice = {}
+    normalized["voice_suggestion"] = {
+        "pace": str(voice.get("pace") or "中速自然"),
+        "energy": _ratio(voice.get("energy"), 0.55),
+        "warmth": _ratio(voice.get("warmth"), 0.68),
+    }
     return normalized
 
 

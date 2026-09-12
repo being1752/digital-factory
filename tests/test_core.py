@@ -209,7 +209,7 @@ class CoreTests(unittest.TestCase):
             with self.assertRaises(MusicLibraryError):
                 copy_music_by_name(library, input_dir, "../selected.mp3")
 
-    def test_image_analysis_normalizes_aliases_and_rejects_missing_details(self) -> None:
+    def test_image_analysis_completes_auxiliary_fields_and_requires_core_details(self) -> None:
         normalized = normalize_image_analysis(
             {
                 "character": "人物外观",
@@ -218,18 +218,15 @@ class CoreTests(unittest.TestCase):
                 "background": "室内柔光",
                 "style": "专业风格",
                 "action_space": "手部和上身可活动",
-                "shot_type": "中近景",
-                "visual_style": "自然",
-                "baseline_expression": "浅笑",
-                "persona": "亲切",
-                "motion_level": 0.4,
-                "voice_suggestion": {"pace": "medium", "energy": 0.5, "warmth": 0.7},
-                "available_actions": ["自然摆手"],
-                "forbidden_actions": ["动作超出画面"],
             }
         )
         self.assertEqual(normalized["clothing_accessories"], "服饰信息")
         self.assertEqual(normalized["visible_motion_space"], "手部和上身可活动")
+        self.assertTrue(normalized["shot_type"])
+        self.assertIn("正面坐姿", normalized["safe_actions"][0])
+        self.assertIn("手部和上身可活动", normalized["avoid_actions"][0])
+        self.assertIsInstance(normalized["motion_level"], float)
+        self.assertIsInstance(normalized["voice_suggestion"]["energy"], float)
         with self.assertRaisesRegex(ValueError, "clothing_accessories"):
             normalize_image_analysis(
                 {
