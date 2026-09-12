@@ -285,7 +285,13 @@ class SubtitleRenderer:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await process.communicate()
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+            await process.communicate()
+            raise
         if process.returncode != 0:
             raise SubtitleError(stderr.decode("utf-8", errors="replace").strip())
         payload = json.loads(stdout.decode("utf-8"))
@@ -345,6 +351,11 @@ class SubtitleRenderer:
             _, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=self.timeout_seconds
             )
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+            await process.communicate()
+            raise
         except asyncio.TimeoutError as exc:
             process.kill()
             await process.wait()

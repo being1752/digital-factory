@@ -175,14 +175,23 @@ class TaskRunner:
         project = self.repository.get(project_id)
         if not project:
             return
-        prompt_id = project.get("video_prompt_id") or project.get("tts_prompt_id")
-        if prompt_id:
-            try:
-                await ComfyUIClient(
-                    self._comfy_url(), self.settings.comfy_timeout_seconds
-                ).cancel(str(prompt_id))
-            except Exception:
-                pass
+        prompt_ids = {
+            str(prompt_id)
+            for prompt_id in (
+                project.get("video_prompt_id"),
+                project.get("tts_prompt_id"),
+            )
+            if prompt_id
+        }
+        if prompt_ids:
+            client = ComfyUIClient(
+                self._comfy_url(), self.settings.comfy_timeout_seconds
+            )
+            for prompt_id in prompt_ids:
+                try:
+                    await client.cancel(prompt_id)
+                except Exception:
+                    pass
 
     async def align_audio(self, project_id: str) -> None:
         project = self._project(project_id)

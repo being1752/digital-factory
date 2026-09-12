@@ -587,6 +587,84 @@ class CoreTests(unittest.TestCase):
         )
         self.assertIn("已请求卸载模型", note)
 
+    def test_comfy_cancel_does_not_interrupt_a_different_running_prompt(self) -> None:
+        class Response:
+            def __init__(self, payload=None):
+                self.payload = payload or {}
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        class Client:
+            def __init__(self):
+                self.posts = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def get(self, url):
+                return Response(
+                    {
+                        "queue_running": [[0, "other-prompt", {}, {}, []]],
+                        "queue_pending": [],
+                    }
+                )
+
+            async def post(self, url, json=None):
+                self.posts.append((url, json))
+                return Response()
+
+        fake_client = Client()
+        with patch("app.comfyui.httpx.AsyncClient", return_value=fake_client):
+            asyncio.run(
+                ComfyUIClient("http://127.0.0.1:8188").cancel("target-prompt")
+            )
+        self.assertEqual(fake_client.posts, [])
+
+    def test_comfy_cancel_interrupts_only_when_target_is_running(self) -> None:
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "queue_running": [[0, "target-prompt", {}, {}, []]],
+                    "queue_pending": [],
+                }
+
+        class Client:
+            def __init__(self):
+                self.posts = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def get(self, url):
+                return Response()
+
+            async def post(self, url, json=None):
+                self.posts.append((url, json))
+                return Response()
+
+        fake_client = Client()
+        with patch("app.comfyui.httpx.AsyncClient", return_value=fake_client):
+            asyncio.run(
+                ComfyUIClient("http://127.0.0.1:8188").cancel("target-prompt")
+            )
+        self.assertEqual(
+            fake_client.posts,
+            [("http://127.0.0.1:8188/interrupt", None)],
+        )
+
     def test_segment_count_uses_overlap(self) -> None:
         self.assertEqual(self.compiler.expected_segment_count(4.0), 1)
         self.assertEqual(self.compiler.expected_segment_count(4.5), 2)

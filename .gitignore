@@ -12,6 +12,7 @@ pyvenv.cfg
 .coverage
 .mypy_cache/
 .ruff_cache/
+material/
 
 # HBuilderX / uni-app build output
 unpackage/

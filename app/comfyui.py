@@ -192,14 +192,58 @@ class ComfyUIClient:
                         await submitted_result
             return prompt_id, await self.wait(prompt_id)
 
+    @staticmethod
+    def _queued_prompt_ids(items: Any) -> set[str]:
+        prompt_ids: set[str] = set()
+        if not isinstance(items, list):
+            return prompt_ids
+        for item in items:
+            if isinstance(item, (list, tuple)) and len(item) > 1:
+                prompt_ids.add(str(item[1]))
+            elif isinstance(item, dict):
+                prompt_id = item.get("prompt_id")
+                if prompt_id:
+                    prompt_ids.add(str(prompt_id))
+        return prompt_ids
+
     async def cancel(self, prompt_id: str | None = None) -> None:
+        """Cancel only the requested prompt without interrupting another job.
+
+        ComfyUI's ``/interrupt`` endpoint targets the globally running prompt; it
+        does not accept a prompt id.  Therefore the queue must be inspected before
+        calling it.  A pending prompt can be removed without touching the current
+        execution.
+        """
+        if not prompt_id:
+            return
+        target = str(prompt_id)
         async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(f"{self.base_url}/interrupt")
+            response = await client.get(f"{self.base_url}/queue")
             response.raise_for_status()
-            if prompt_id:
-                response = await client.post(
-                    f"{self.base_url}/queue", json={"delete": [prompt_id]}
-                )
+            queue = response.json()
+            running = self._queued_prompt_ids(queue.get("queue_running"))
+            pending = self._queued_prompt_ids(queue.get("queue_pending"))
+
+            if target in running:
+                response = await client.post(f"{self.base_url}/interrupt")
+                response.raise_for_status()
+                return
+
+            if target not in pending:
+                return
+            response = await client.post(
+                f"{self.base_url}/queue", json={"delete": [target]}
+            )
+            response.raise_for_status()
+
+            # The scheduler may move a prompt from pending to running between
+            # the GET and DELETE. Re-check before deciding whether to interrupt.
+            response = await client.get(f"{self.base_url}/queue")
+            response.raise_for_status()
+            queue = response.json()
+            running = self._queued_prompt_ids(queue.get("queue_running"))
+            if target in running:
+                response = await client.post(f"{self.base_url}/interrupt")
                 response.raise_for_status()
 
     async def history(self, prompt_id: str) -> dict[str, Any] | None:

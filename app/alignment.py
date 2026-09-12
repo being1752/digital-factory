@@ -87,6 +87,12 @@ class SpeechAlignmentService:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=self.settings.whisper_timeout_seconds
             )
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+            stdout, stderr = await process.communicate()
+            self._write_log(run_dir, command, stdout, stderr, "CANCELLED")
+            raise
         except asyncio.TimeoutError as exc:
             process.kill()
             stdout, stderr = await process.communicate()

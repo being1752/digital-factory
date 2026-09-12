@@ -869,6 +869,31 @@ async def project_detail(project_id: str) -> dict[str, Any]:
     return public_project(get_project(project_id))
 
 
+async def remove_project_directory(project_dir: Path) -> bool:
+    """Remove a project tree after cancelled child processes release handles."""
+    if not project_dir.exists():
+        return False
+    if not project_dir.is_dir():
+        raise HTTPException(409, "项目路径不是目录，已拒绝删除")
+    last_error: OSError | None = None
+    for attempt in range(8):
+        try:
+            shutil.rmtree(project_dir)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            last_error = exc
+            if attempt == 7:
+                break
+            await asyncio.sleep(0.2 * (attempt + 1))
+    locked_path = getattr(last_error, "filename", None) or str(project_dir)
+    raise HTTPException(
+        409,
+        f"项目文件仍被后台进程占用，暂时无法删除：{locked_path}。请稍后重试。",
+    ) from last_error
+
+
 @app.delete("/api/projects/{project_id}")
 async def delete_project(project_id: str) -> dict[str, Any]:
     project = get_project(project_id)
@@ -878,12 +903,7 @@ async def delete_project(project_id: str) -> dict[str, Any]:
     if running and not running.done():
         raise HTTPException(409, "项目任务正在执行，请等待任务结束后再删除")
     project_dir = safe_project_directory(project)
-    files_removed = False
-    if project_dir.exists():
-        if not project_dir.is_dir():
-            raise HTTPException(409, "项目路径不是目录，已拒绝删除")
-        shutil.rmtree(project_dir)
-        files_removed = True
+    files_removed = await remove_project_directory(project_dir)
     if not repository.delete(project_id):
         raise HTTPException(404, "项目不存在")
     repository.delete_tasks_for_project(project_id)
@@ -1097,11 +1117,7 @@ async def delete_production_task(task_id: str) -> dict[str, Any]:
     files_removed = False
     if project:
         project_dir = safe_project_directory(project)
-        if project_dir.exists():
-            if not project_dir.is_dir():
-                raise HTTPException(409, "项目路径不是目录，已拒绝删除")
-            shutil.rmtree(project_dir)
-            files_removed = True
+        files_removed = await remove_project_directory(project_dir)
         repository.delete(project_id)
     repository.delete_tasks_for_project(project_id)
     runner.tasks.pop(project_id, None)
