@@ -217,14 +217,13 @@ class CoreTests(unittest.TestCase):
                 "pose": "正面坐姿",
                 "background": "室内柔光",
                 "style": "专业风格",
-                "action_space": "手部和上身可活动",
             }
         )
         self.assertEqual(normalized["clothing_accessories"], "服饰信息")
-        self.assertEqual(normalized["visible_motion_space"], "手部和上身可活动")
+        self.assertIn("正面坐姿", normalized["visible_motion_space"])
         self.assertTrue(normalized["shot_type"])
         self.assertIn("正面坐姿", normalized["safe_actions"][0])
-        self.assertIn("手部和上身可活动", normalized["avoid_actions"][0])
+        self.assertIn(normalized["visible_motion_space"], normalized["avoid_actions"][0])
         self.assertIsInstance(normalized["motion_level"], float)
         self.assertIsInstance(normalized["voice_suggestion"]["energy"], float)
         with self.assertRaisesRegex(ValueError, "clothing_accessories"):

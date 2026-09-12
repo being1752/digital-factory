@@ -57,7 +57,6 @@ _REQUIRED_VISUAL_TEXT_FIELDS = (
     "pose_description",
     "background_lighting",
     "overall_style",
-    "visible_motion_space",
 )
 
 
@@ -68,6 +67,17 @@ def _ratio(value: Any, fallback: float) -> float:
         return fallback
     return number if 0 <= number <= 1 else fallback
 
+
+def _motion_space_from_pose(pose: str) -> str:
+    if "全身" in pose:
+        return "头部、上身、双臂、双手及站姿范围均可在画面内自然活动"
+    if any(word in pose for word in ("手部不可见", "双手不可见", "手不在画面")):
+        return "以头部、眼神、表情和肩颈动作为主，避免强行生成画面外手部动作"
+    if any(word in pose for word in ("半身", "上半身", "双手", "手臂")):
+        return "头部、上身、手臂和画面内可见双手可自然配合口播活动"
+    if any(word in pose for word in ("坐姿", "站姿")):
+        return f"保持原有{pose}，允许头部、肩颈、上身及画面内可见肢体自然活动"
+    return "保持图片原始姿势，在画面可见范围内进行头部、表情和自然肢体动作"
 
 def _shot_type_from_description(pose: str, motion_space: str) -> str:
     description = f"{pose} {motion_space}"
@@ -102,10 +112,14 @@ def normalize_image_analysis(value: Any) -> dict[str, Any]:
         )
 
     pose = str(provided["pose_description"]).strip()
-    motion_space = str(provided["visible_motion_space"]).strip()
+    motion_space = (
+        str(provided.get("visible_motion_space") or "").strip()
+        or _motion_space_from_pose(pose)
+    )
     overall_style = str(provided["overall_style"]).strip()
     character = str(provided["character_description"]).strip()
     normalized = {**DEFAULT_ANALYSIS, **provided}
+    normalized["visible_motion_space"] = motion_space
     normalized["shot_type"] = (
         str(provided.get("shot_type") or "").strip()
         or _shot_type_from_description(pose, motion_space)
