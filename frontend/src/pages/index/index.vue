@@ -7,7 +7,7 @@
 
     <TaskQueuePage v-else-if="viewMode==='queue'" :tasks="tasks" :running-count="runningTaskCount" :queued-count="queuedTaskCount" :failed-count="failedTaskCount" :realtime-connected="realtimeConnected" :status-name="statusName" :task-stage-name="taskStageName" :tts-engine-name="ttsEngineName" :task-progress-text="taskProgressText" :task-display-class="taskDisplayClass" :can-retry-task="canRetryTask" @refresh="loadTasks" @create="navigateTo('create')" @open="openProject" @cancel="cancelTask" @retry="retryTask" @delete="deleteTask" />
 
-    <DigitalHumanLibrary v-else-if="viewMode==='characters'" :profiles="characterProfiles" :editor-open="characterEditorOpen" :editing-profile="editingCharacterProfile" :draft="characterDraft" :image-path="characterImagePath" :image-file-name="characterImageFileName" :voice-path="characterVoicePath" :voice-file-name="characterVoiceFileName" :emotion-voice-path="characterEmotionVoicePath" :emotion-voice-file-name="characterEmotionVoiceFileName" :saving="characterSaving" @create="openNewCharacter" @open="openCharacterEditor" @back="closeCharacterEditor" @save="saveCharacterProfile" @delete="deleteCharacterProfile" @choose-asset="chooseCharacterAsset" />
+    <DigitalHumanLibrary v-else-if="viewMode==='characters'" :profiles="characterProfiles" :editor-open="characterEditorOpen" :editing-profile="editingCharacterProfile" :draft="characterDraft" :image-path="characterImagePath" :image-file-name="characterImageFileName" :voice-path="characterVoicePath" :voice-file-name="characterVoiceFileName" :emotion-voice-path="characterEmotionVoicePath" :emotion-voice-file-name="characterEmotionVoiceFileName" :saving="characterSaving" @create="openNewCharacter" @open="openCharacterEditor" @back="closeCharacterEditor" @save="saveCharacterProfile" @delete="deleteCharacterProfile" @choose-asset="chooseCharacterAsset" @update-draft="updateCharacterDraft" />
 
     <view v-if="viewMode==='create'||viewMode==='projects'" class="shell" :class="{'create-shell':viewMode==='create'}">
       <ProjectBrowser v-if="viewMode==='projects'" sidebar :projects="projects" :current-id="current?.id||''" :status-name="statusName" @refresh="loadProjects" @open="openProject" @delete="deleteProject" />
@@ -186,6 +186,7 @@ export default {
       this.imagePath='';this.imageFileName='';this.voicePath='';this.voiceFileName='';this.emotionVoicePath='';this.emotionVoiceFileName=''
     },
     resetCharacterEditorAssets(){this.characterImagePath='';this.characterImageFileName='';this.characterVoicePath='';this.characterVoiceFileName='';this.characterEmotionVoicePath='';this.characterEmotionVoiceFileName=''},
+    updateCharacterDraft(change){if(!change?.field)return;this.characterDraft={...this.characterDraft,[change.field]:change.value}},
     openNewCharacter(){this.characterEditorOpen=true;this.editingCharacterProfile=null;this.characterDraft={name:'',note:'',default_tts_engine:'indextts2_legacy'};this.resetCharacterEditorAssets()},
     openCharacterEditor(profile){this.characterEditorOpen=true;this.editingCharacterProfile=profile;this.characterDraft={name:profile.name||'',note:profile.note||'',default_tts_engine:profile.default_tts_engine||'indextts2_legacy'};this.resetCharacterEditorAssets()},
     closeCharacterEditor(){this.characterEditorOpen=false;this.editingCharacterProfile=null;this.resetCharacterEditorAssets()},
