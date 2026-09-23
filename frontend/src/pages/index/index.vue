@@ -7,12 +7,14 @@
 
     <TaskQueuePage v-else-if="viewMode==='queue'" :tasks="tasks" :running-count="runningTaskCount" :queued-count="queuedTaskCount" :failed-count="failedTaskCount" :realtime-connected="realtimeConnected" :status-name="statusName" :task-stage-name="taskStageName" :tts-engine-name="ttsEngineName" :task-progress-text="taskProgressText" :task-display-class="taskDisplayClass" :can-retry-task="canRetryTask" @refresh="loadTasks" @create="navigateTo('create')" @open="openProject" @cancel="cancelTask" @retry="retryTask" @delete="deleteTask" />
 
+    <DigitalHumanLibrary v-else-if="viewMode==='characters'" :profiles="characterProfiles" :editor-open="characterEditorOpen" :editing-profile="editingCharacterProfile" :draft="characterDraft" :image-path="characterImagePath" :image-file-name="characterImageFileName" :voice-path="characterVoicePath" :voice-file-name="characterVoiceFileName" :emotion-voice-path="characterEmotionVoicePath" :emotion-voice-file-name="characterEmotionVoiceFileName" :saving="characterSaving" @create="openNewCharacter" @open="openCharacterEditor" @back="closeCharacterEditor" @save="saveCharacterProfile" @delete="deleteCharacterProfile" @choose-asset="chooseCharacterAsset" />
+
     <view v-if="viewMode==='create'||viewMode==='projects'" class="shell" :class="{'create-shell':viewMode==='create'}">
       <ProjectBrowser v-if="viewMode==='projects'" sidebar :projects="projects" :current-id="current?.id||''" :status-name="statusName" @refresh="loadProjects" @open="openProject" @delete="deleteProject" />
 
       <view class="workspace">
         <ProjectBrowser v-if="viewMode==='projects'&&!current" :projects="projects" :status-name="statusName" @create="navigateTo('create')" @open="openProject" @delete="deleteProject" />
-        <CreateTask v-if="viewMode==='create'" :form="form" :profiles="characterProfiles" :selected-profile="selectedCharacterProfile" :selected-profile-image="selectedCharacterProfileImage" :create-panels="createPanels" :font-options="fontOptions" :subtitle-colors="subtitleColors" :subtitle-positions="subtitlePositions" :script-summary="scriptSummary" :create-checks="createChecks" :create-ready="createReady" :image-path="imagePath" :image-file-name="imageFileName" :voice-path="voicePath" :voice-file-name="voiceFileName" :emotion-voice-path="emotionVoicePath" :emotion-voice-file-name="emotionVoiceFileName" :bgm-path="bgmPath" :bgm-file-name="bgmFileName" :bgm-random-name="bgmRandomName" :bgm-preview-playing="bgmPreviewPlaying" :submitting="submitting" :upload-label="uploadLabel" :upload-progress="uploadProgress" @set-title="setProjectTitle" @select-profile="selectCharacterProfile" @save-profile="saveCharacterProfile" @update-profile="updateCharacterProfile" @delete-profile="deleteCharacterProfile" @choose-image="chooseImage" @choose-voice="chooseVoice" @choose-emotion-voice="chooseEmotionVoice" @choose-bgm="chooseBgm" @choose-random-bgm-preview="chooseRandomBgmPreview" @preview-bgm="toggleCreateBgmPreview" @stop-bgm-preview="resetBgmPreview" @update-bgm-preview-volume="updateBgmPreviewVolume" @toggle-panel="toggleCreatePanel" @set-auto-run="setAutoRun" @set-bgm-enabled="setBgmEnabled" @set-bgm-ducking="setBgmDucking" @set-title-enabled="setVideoTitleEnabled($event,form)" @set-subtitle-enabled="setSubtitleEnabled" @set-subtitle-bold="setSubtitleBold($event,form)" @set-subtitle-background="setSubtitleBackground" @apply-title-preset="applyChannelsTitlePreset(form)" @apply-subtitle-preset="applyChannelsSubtitlePreset(form)" @submit="createProject" />
+        <CreateTask v-if="viewMode==='create'" :form="form" :profiles="characterProfiles" :selected-profile="selectedCharacterProfile" :selected-profile-image="selectedCharacterProfileImage" :create-panels="createPanels" :font-options="fontOptions" :subtitle-colors="subtitleColors" :subtitle-positions="subtitlePositions" :script-summary="scriptSummary" :create-checks="createChecks" :create-ready="createReady" :image-path="imagePath" :image-file-name="imageFileName" :voice-path="voicePath" :voice-file-name="voiceFileName" :emotion-voice-path="emotionVoicePath" :emotion-voice-file-name="emotionVoiceFileName" :bgm-path="bgmPath" :bgm-file-name="bgmFileName" :bgm-random-name="bgmRandomName" :bgm-preview-playing="bgmPreviewPlaying" :submitting="submitting" :upload-label="uploadLabel" :upload-progress="uploadProgress" @set-title="setProjectTitle" @select-profile="selectCharacterProfile" @open-library="navigateTo('characters')" @choose-image="chooseImage" @choose-voice="chooseVoice" @choose-emotion-voice="chooseEmotionVoice" @choose-bgm="chooseBgm" @choose-random-bgm-preview="chooseRandomBgmPreview" @preview-bgm="toggleCreateBgmPreview" @stop-bgm-preview="resetBgmPreview" @update-bgm-preview-volume="updateBgmPreviewVolume" @toggle-panel="toggleCreatePanel" @set-auto-run="setAutoRun" @set-bgm-enabled="setBgmEnabled" @set-bgm-ducking="setBgmDucking" @set-title-enabled="setVideoTitleEnabled($event,form)" @set-subtitle-enabled="setSubtitleEnabled" @set-subtitle-bold="setSubtitleBold($event,form)" @set-subtitle-background="setSubtitleBackground" @apply-title-preset="applyChannelsTitlePreset(form)" @apply-subtitle-preset="applyChannelsSubtitlePreset(form)" @submit="createProject" />
 
 
         <template v-if="viewMode==='projects'&&current">
@@ -94,6 +96,7 @@ import ProjectTabs from '../../components/ProjectTabs.vue'
 import PersistentError from '../../components/PersistentError.vue'
 import PostEditor from '../../components/PostEditor.vue'
 import CreateTask from '../../components/CreateTask.vue'
+import DigitalHumanLibrary from '../../components/DigitalHumanLibrary.vue'
 
 const BUSY = new Set(['QUEUE_WAITING','UPLOADING_ASSETS','ANALYZE_QUEUED','ANALYZING_IMAGE','ANALYSIS_RETRYING','AUDIO_QUEUED','UPLOADING_REFERENCE_AUDIO','GENERATING_AUDIO','ALIGN_QUEUED','ALIGNING_SPEECH','PLANNING_ACTIONS','VIDEO_QUEUED','UPLOADING_VIDEO_ASSETS','GENERATING_VIDEO','BGM_QUEUED','MIXING_BGM'])
 const STATUS = {CREATED:'已创建',QUEUE_WAITING:'等待队列执行',UPLOADING_ASSETS:'正在上传任务素材',QUEUE_CANCELLED:'队列任务已取消',ANALYZE_QUEUED:'等待分析',ANALYZING_IMAGE:'正在分析人物图片',ANALYSIS_RETRYING:'分析失败，正在自动重试',SCRIPT_READY:'导演方案已就绪',AUDIO_QUEUED:'等待生成配音',UPLOADING_REFERENCE_AUDIO:'正在上传参考声音',GENERATING_AUDIO:'正在生成配音',ALIGN_QUEUED:'等待匹配口播时间',ALIGNING_SPEECH:'正在匹配口播时间',PLANNING_ACTIONS:'正在设计动作和表情',PLAN_READY:'配音与动作方案已就绪',VIDEO_QUEUED:'等待生成视频',UPLOADING_VIDEO_ASSETS:'正在准备视频素材',GENERATING_VIDEO:'正在生成数字人视频',VIDEO_READY:'无配乐视频已就绪',BGM_QUEUED:'等待添加配乐',MIXING_BGM:'正在添加背景音乐',BGM_ERROR:'配乐失败，原视频可用',COMPLETED:'制作完成',ERROR:'生成失败'}
@@ -102,12 +105,13 @@ const TASK_STAGE = {WAITING:'等待资源',UPLOADING_ASSETS:'上传任务素材'
 for(const value of ['SUBTITLE_QUEUED','BURNING_SUBTITLES'])BUSY.add(value)
 Object.assign(STATUS,{VIDEO_READY:'原始视频已就绪',SUBTITLE_QUEUED:'等待添加标题和字幕',BURNING_SUBTITLES:'正在添加标题和字幕',SUBTITLE_READY:'标题/字幕版已就绪',BGM_ERROR:'配乐失败，前一版本可用'})
 Object.assign(TASK_STAGE,{BURNING_SUBTITLES:'添加标题和字幕',MIXING_BGM:'添加背景音乐'})
+const CHARACTER_PROFILE_STORAGE='digital_factory_character_profile_id'
 
 export default {
-  components:{AppChrome,SettingsPage,TaskQueuePage,ProjectBrowser,ProjectTabs,PersistentError,PostEditor,CreateTask},
-  data() { return {viewMode:'create',projectTab:'overview',pageVisible:true,realtimeConnected:false,uploadProgress:0,uploadLabel:'',health:{},appSettings:{comfy_url:'',music_library_path:'',music_library_count:0},settingsSaving:false,availableFonts:[],projects:[],tasks:[],characterProfiles:[],selectedCharacterProfileId:'',current:null,poll:null,queuePoll:null,submitting:false,comfyChecking:false,comfyCheckResult:'',comfyCheckOk:false,imagePath:'',imageFileName:'',voicePath:'',voiceFileName:'',emotionVoicePath:'',emotionVoiceFileName:'',bgmPath:'',bgmFileName:'',bgmRandomName:'',bgmPreviewPlaying:false,bgmPreviewSource:'',audioPlaying:false,audioCurrent:0,audioTotal:0,audioSource:'',videoSource:'',createPanels:{title:false,subtitle:false,bgm:false},postPanels:{title:false,subtitle:false},emotionNames:['Happy','Angry','Sad','Fear','Hate','Low','Surprise','Neutral'],form:{title:'健康管理口播',character_profile_id:null,tts_engine:'indextts2_legacy',original_script:'百万亿健康管理蓝海市场，机遇就在眼前。友福同享智能科技有限公司，专注一站式AI健康管理五年多。现面向全国招募社区健康服务中心项目合伙人。如果你对健康管理感兴趣，想低门槛撬动高价值、高利润项目，友福就是你的最佳选择。友福三大核心优势，帮合伙人轻松开拓市场。',auto_run:true,bgm_enabled:true,bgm_source:'library_random',bgm_library_name:null,bgm_volume:0.25,bgm_ducking:true,bgm_fade_in:1.5,bgm_fade_out:2}} },
+  components:{AppChrome,SettingsPage,TaskQueuePage,ProjectBrowser,ProjectTabs,PersistentError,PostEditor,CreateTask,DigitalHumanLibrary},
+  data() { return {viewMode:'create',projectTab:'overview',pageVisible:true,realtimeConnected:false,uploadProgress:0,uploadLabel:'',health:{},appSettings:{comfy_url:'',music_library_path:'',music_library_count:0},settingsSaving:false,availableFonts:[],projects:[],tasks:[],characterProfiles:[],selectedCharacterProfileId:'',characterEditorOpen:false,editingCharacterProfile:null,characterDraft:{name:'',note:'',default_tts_engine:'indextts2_legacy'},characterImagePath:'',characterImageFileName:'',characterVoicePath:'',characterVoiceFileName:'',characterEmotionVoicePath:'',characterEmotionVoiceFileName:'',characterSaving:false,current:null,poll:null,queuePoll:null,submitting:false,comfyChecking:false,comfyCheckResult:'',comfyCheckOk:false,imagePath:'',imageFileName:'',voicePath:'',voiceFileName:'',emotionVoicePath:'',emotionVoiceFileName:'',bgmPath:'',bgmFileName:'',bgmRandomName:'',bgmPreviewPlaying:false,bgmPreviewSource:'',audioPlaying:false,audioCurrent:0,audioTotal:0,audioSource:'',videoSource:'',createPanels:{title:false,subtitle:false,bgm:false},postPanels:{title:false,subtitle:false},emotionNames:['Happy','Angry','Sad','Fear','Hate','Low','Surprise','Neutral'],form:{title:'健康管理口播',character_profile_id:null,tts_engine:'indextts2_legacy',original_script:'百万亿健康管理蓝海市场，机遇就在眼前。友福同享智能科技有限公司，专注一站式AI健康管理五年多。现面向全国招募社区健康服务中心项目合伙人。如果你对健康管理感兴趣，想低门槛撬动高价值、高利润项目，友福就是你的最佳选择。友福三大核心优势，帮合伙人轻松开拓市场。',auto_run:true,bgm_enabled:true,bgm_source:'library_random',bgm_library_name:null,bgm_volume:0.25,bgm_ducking:true,bgm_fade_in:1.5,bgm_fade_out:2}} },
   computed: {
-    navigation(){return [{label:'新建任务',value:'create',icon:'＋'},{label:'任务队列',value:'queue',icon:'↻'},{label:'项目库',value:'projects',icon:'▦'},{label:'系统设置',value:'settings',icon:'⚙'}]},
+    navigation(){return [{label:'新建任务',value:'create',icon:'＋'},{label:'数字人库',value:'characters',icon:'♙'},{label:'任务队列',value:'queue',icon:'↻'},{label:'项目库',value:'projects',icon:'▦'},{label:'系统设置',value:'settings',icon:'⚙'}]},
     projectTabs(){return [{label:'概览',value:'overview'},{label:'导演方案',value:'director'},{label:'音频与动作',value:'audio'},{label:'成片后期',value:'post'}]},
     activeTaskCount(){return this.tasks.filter(task=>task.status==='QUEUED'||task.status==='RUNNING').length},
     runningTaskCount(){return this.tasks.filter(task=>task.status==='RUNNING').length},
@@ -153,7 +157,7 @@ export default {
       if(!this.realtimeConnected)this.startQueuePolling()
       this.startPolling()
     },
-    navigateTo(mode){if(mode==='projects'&&this.viewMode==='projects'&&this.current){this.backToProjectLibrary();return}this.viewMode=mode;if(mode!=='projects'){clearInterval(this.poll);this.resetAudio();this.resetBgmPreview();this.resetVideo()}if(mode==='create'){this.current=null;this.createPanels={title:false,subtitle:false,bgm:false}};if(mode==='projects'&&!this.current)this.loadProjects();if(mode==='queue')this.loadTasks()},
+    navigateTo(mode){if(mode==='projects'&&this.viewMode==='projects'&&this.current){this.backToProjectLibrary();return}this.viewMode=mode;if(mode!=='projects'){clearInterval(this.poll);this.resetAudio();this.resetBgmPreview();this.resetVideo()}if(mode==='create'){this.current=null;this.createPanels={title:false,subtitle:false,bgm:false}};if(mode==='projects'&&!this.current)this.loadProjects();if(mode==='queue')this.loadTasks();if(mode==='characters')this.loadCharacterProfiles()},
     backToProjectLibrary(){clearInterval(this.poll);this.resetAudio();this.resetBgmPreview();this.resetVideo();this.current=null;this.projectTab='overview';this.postPanels={title:false,subtitle:false};if(!this.projects.length)this.loadProjects()},
     taskProgressText(task){if(task.video_segment_total){const current=Number(task.video_segment_current||0);if(task.video_progress_mode==='http_fallback'&&!current)return '视频生成中 · 正在恢复进度显示';return current?`视频生成 ${current}/${task.video_segment_total}`:'视频任务正在准备'}if(task.queue_position)return `队列第 ${task.queue_position} 位`;return this.taskStageName(task.stage)},
     copyError(error){const value=typeof error==='string'?error:JSON.stringify(error,null,2);uni.setClipboardData({data:value,success:()=>this.toast('错误信息已复制','success')})},
@@ -161,12 +165,65 @@ export default {
     setProjectTitle(event){this.form.title=event?.detail?.value??event?.target?.value??event?.currentTarget?.value??''},
     async loadAppSettings(){this.appSettings=await request('/api/settings')},
     async loadFonts(){try{const fonts=await request('/api/fonts');if(Array.isArray(fonts)&&fonts.length)this.availableFonts=fonts}catch(_){}},
-    async loadCharacterProfiles(){this.characterProfiles=await request('/api/character-profiles');if(this.selectedCharacterProfileId&&!this.characterProfiles.some(item=>item.id===this.selectedCharacterProfileId)){this.selectedCharacterProfileId='';this.form.character_profile_id=null}},
-    selectCharacterProfile(id){this.selectedCharacterProfileId=String(id||'');this.form.character_profile_id=this.selectedCharacterProfileId||null;const profile=this.selectedCharacterProfile;if(!profile)return;this.form.tts_engine=profile.default_tts_engine||'indextts2_legacy';if(profile.emotion)this.form.emotion={...profile.emotion};this.imagePath='';this.imageFileName='';this.voicePath='';this.voiceFileName='';this.emotionVoicePath='';this.emotionVoiceFileName=''},
-    async uploadCharacterProfileAssets(profileId){let profile=null;if(this.imagePath)profile=await upload(`/api/character-profiles/${profileId}/assets/image`,this.imagePath);if(this.voicePath)profile=await upload(`/api/character-profiles/${profileId}/assets/voice`,this.voicePath);if(this.emotionVoicePath)profile=await upload(`/api/character-profiles/${profileId}/assets/emotion_voice`,this.emotionVoicePath);return profile},
-    saveCharacterProfile(){const clone=this.form.tts_engine==='indextts2_voice_clone';if(!this.imagePath||!this.voicePath){this.toast('请先选择数字人图片和音色参考音频');return}if(clone&&!this.emotionVoicePath){this.toast('当前配音方式还需要情感参考音频');return}uni.showModal({title:'保存角色配置',editable:true,placeholderText:'例如：陈彬',confirmText:'保存',success:async result=>{const name=String(result.content||'').trim();if(!result.confirm||!name)return;let profile=null;try{profile=await request('/api/character-profiles',{method:'POST',data:{name,default_tts_engine:this.form.tts_engine,emotion:this.form.emotion||undefined}});await this.uploadCharacterProfileAssets(profile.id);await this.loadCharacterProfiles();this.selectCharacterProfile(profile.id);this.toast('角色配置已保存','success')}catch(error){if(profile?.id)try{await request(`/api/character-profiles/${profile.id}`,{method:'DELETE'})}catch(_){}this.toast(error.message)}}})},
-    updateCharacterProfile(){const profile=this.selectedCharacterProfile;if(!profile)return;uni.showModal({title:'修改角色配置',editable:true,content:profile.name,placeholderText:'角色名称',confirmText:'保存修改',success:async result=>{const name=String(result.content||profile.name).trim();if(!result.confirm||!name)return;try{await request(`/api/character-profiles/${profile.id}`,{method:'PATCH',data:{name,default_tts_engine:this.form.tts_engine,emotion:this.form.emotion||undefined}});await this.uploadCharacterProfileAssets(profile.id);await this.loadCharacterProfiles();this.selectedCharacterProfileId=profile.id;this.form.character_profile_id=profile.id;this.toast('角色配置已更新，历史任务不受影响','success')}catch(error){this.toast(error.message)}}})},
-    deleteCharacterProfile(){const profile=this.selectedCharacterProfile;if(!profile)return;uni.showModal({title:'删除角色配置',content:`确定删除“${profile.name}”吗？历史任务不会受到影响。`,confirmText:'删除',confirmColor:'#ff7583',success:async result=>{if(!result.confirm)return;try{await request(`/api/character-profiles/${profile.id}`,{method:'DELETE'});this.selectCharacterProfile('');await this.loadCharacterProfiles();this.toast('角色配置已删除','success')}catch(error){this.toast(error.message)}}})},
+    async loadCharacterProfiles(){
+      this.characterProfiles=await request('/api/character-profiles')
+      const remembered=String(uni.getStorageSync(CHARACTER_PROFILE_STORAGE)||'')
+      const currentValid=this.characterProfiles.some(item=>item.id===this.selectedCharacterProfileId)
+      const rememberedValid=this.characterProfiles.some(item=>item.id===remembered)
+      const nextId=currentValid?this.selectedCharacterProfileId:(rememberedValid?remembered:(this.characterProfiles[0]?.id||''))
+      if(nextId!==this.selectedCharacterProfileId)this.selectCharacterProfile(nextId)
+      if(!nextId){this.selectedCharacterProfileId='';this.form.character_profile_id=null}
+    },
+    selectCharacterProfile(id){
+      this.selectedCharacterProfileId=String(id||'')
+      this.form.character_profile_id=this.selectedCharacterProfileId||null
+      if(this.selectedCharacterProfileId)uni.setStorageSync(CHARACTER_PROFILE_STORAGE,this.selectedCharacterProfileId)
+      else uni.removeStorageSync(CHARACTER_PROFILE_STORAGE)
+      const profile=this.selectedCharacterProfile
+      if(!profile)return
+      this.form.tts_engine=profile.default_tts_engine||'indextts2_legacy'
+      if(profile.emotion)this.form.emotion={...profile.emotion}
+      this.imagePath='';this.imageFileName='';this.voicePath='';this.voiceFileName='';this.emotionVoicePath='';this.emotionVoiceFileName=''
+    },
+    resetCharacterEditorAssets(){this.characterImagePath='';this.characterImageFileName='';this.characterVoicePath='';this.characterVoiceFileName='';this.characterEmotionVoicePath='';this.characterEmotionVoiceFileName=''},
+    openNewCharacter(){this.characterEditorOpen=true;this.editingCharacterProfile=null;this.characterDraft={name:'',note:'',default_tts_engine:'indextts2_legacy'};this.resetCharacterEditorAssets()},
+    openCharacterEditor(profile){this.characterEditorOpen=true;this.editingCharacterProfile=profile;this.characterDraft={name:profile.name||'',note:profile.note||'',default_tts_engine:profile.default_tts_engine||'indextts2_legacy'};this.resetCharacterEditorAssets()},
+    closeCharacterEditor(){this.characterEditorOpen=false;this.editingCharacterProfile=null;this.resetCharacterEditorAssets()},
+    chooseCharacterAsset(kind){
+      if(kind==='image'){uni.chooseImage({count:1,success:r=>{this.characterImagePath=r.tempFilePaths[0];this.characterImageFileName=r.tempFiles?.[0]?.name||'已选择图片'}});return}
+      uni.chooseFile({count:1,extension:['wav','flac','mp3','m4a','m4s','mp4','ogg'],success:r=>{const path=r.tempFilePaths[0],name=r.tempFiles?.[0]?.name||'已选择音频';if(kind==='voice'){this.characterVoicePath=path;this.characterVoiceFileName=name}else{this.characterEmotionVoicePath=path;this.characterEmotionVoiceFileName=name}}})
+    },
+    async uploadCharacterEditorAssets(profileId){
+      if(this.characterImagePath)await upload('/api/character-profiles/'+profileId+'/assets/image',this.characterImagePath)
+      if(this.characterVoicePath)await upload('/api/character-profiles/'+profileId+'/assets/voice',this.characterVoicePath)
+      if(this.characterEmotionVoicePath)await upload('/api/character-profiles/'+profileId+'/assets/emotion_voice',this.characterEmotionVoicePath)
+    },
+    async saveCharacterProfile(){
+      const existing=this.editingCharacterProfile,name=String(this.characterDraft.name||'').trim(),clone=this.characterDraft.default_tts_engine==='indextts2_voice_clone'
+      if(!name){this.toast('请填写数字人配置名称');return}
+      if(!this.characterImagePath&&!existing?.has_image){this.toast('请选择数字人图片');return}
+      if(!this.characterVoicePath&&!existing?.has_voice){this.toast('请选择音色参考音频');return}
+      if(clone&&!this.characterEmotionVoicePath&&!existing?.has_emotion_voice){this.toast('当前配音方式需要情感参考音频');return}
+      this.characterSaving=true
+      let created=null
+      try{
+        const data={name,note:String(this.characterDraft.note||'').trim(),default_tts_engine:this.characterDraft.default_tts_engine}
+        created=existing?await request('/api/character-profiles/'+existing.id,{method:'PATCH',data}):await request('/api/character-profiles',{method:'POST',data})
+        await this.uploadCharacterEditorAssets(created.id)
+        await this.loadCharacterProfiles()
+        const saved=this.characterProfiles.find(item=>item.id===created.id)
+        this.selectCharacterProfile(created.id)
+        if(saved)this.openCharacterEditor(saved)
+        this.toast(existing?'数字人配置已更新':'数字人配置已创建','success')
+      }catch(error){
+        if(!existing&&created?.id)try{await request('/api/character-profiles/'+created.id,{method:'DELETE'})}catch(_){}
+        this.toast(error.message)
+      }finally{this.characterSaving=false}
+    },
+    deleteCharacterProfile(profile=this.editingCharacterProfile){
+      if(!profile)return
+      uni.showModal({title:'删除数字人配置',content:'确定删除“'+profile.name+'”吗？历史任务不会受到影响。',confirmText:'删除',confirmColor:'#ff7583',success:async result=>{if(!result.confirm)return;try{await request('/api/character-profiles/'+profile.id,{method:'DELETE'});if(this.selectedCharacterProfileId===profile.id)this.selectCharacterProfile('');if(this.editingCharacterProfile?.id===profile.id)this.closeCharacterEditor();await this.loadCharacterProfiles();this.toast('数字人配置已删除','success')}catch(error){this.toast(error.message)}}})
+    },
     pasteComfyUrl(){uni.getClipboardData({success:result=>{const value=String(result.data||'').trim();this.appSettings.comfy_url=value;this.toast(value?'URL 已粘贴':'剪贴板为空',value?'success':'none')},fail:error=>this.toast(error.errMsg||'无法读取剪贴板')})},
     async saveAppSettings(){const value=String(this.appSettings.comfy_url||'').trim(),musicPath=String(this.appSettings.music_library_path||'').trim();if(!value){this.toast('请填写 ComfyUI URL');return}if(!musicPath){this.toast('请填写随机配乐文件夹路径');return}this.settingsSaving=true;try{this.appSettings=await request('/api/settings',{method:'PATCH',data:{comfy_url:value,music_library_path:musicPath}});this.toast(`系统设置已保存，识别到 ${Number(this.appSettings.music_library_count||0)} 首音乐`,'success')}catch(error){this.toast(error.message)}finally{this.settingsSaving=false}},
     async loadProjects(){this.projects=await request('/api/projects/summary')},
