@@ -16,13 +16,13 @@
     </template>
     <template v-else>
       <view class="page-heading character-editor-heading">
-        <view><button class="ghost small character-back" @click="$emit('back')">← 返回数字人库</button><text class="eyebrow">CHARACTER PROFILE</text><text class="page-title">{{ editingProfile ? '修改数字人配置' : '新建数字人配置' }}</text><text class="lead">任务会复制一份独立素材，修改配置不会影响历史项目。</text></view>
+        <view><button class="ghost small character-back" @click="$emit('back')">← 返回数字人库</button><text class="eyebrow">CHARACTER PROFILE</text><text class="page-title">{{ editingProfile ? ('修改：' + (draft.name || editingProfile.name)) : '新建数字人配置' }}</text><text class="lead">任务会复制一份独立素材，修改配置不会影响历史项目。</text></view>
       </view>
       <view class="panel character-editor">
         <view class="character-editor-layout">
           <view class="character-editor-preview"><image v-if="imagePath||existingImage" :src="imagePath||existingImage" mode="aspectFill"/><view v-else class="character-preview-empty">选择一张数字人图片</view></view>
           <view class="character-editor-form">
-            <text class="label">配置名称</text><input :value="draft.name" class="field" maxlength="100" placeholder="例如：陈彬" @input="$emit('update-draft',{field:'name',value:$event.detail.value})" />
+            <text class="label">配置名称</text><textarea :value="draft.name" class="field character-name-field" maxlength="100" auto-height placeholder="例如：陈彬" @input="$emit('update-draft',{field:'name',value:$event.detail.value})"></textarea><text v-if="editingProfile" class="hint character-current-name">当前保存名称：{{ editingProfile.name }}</text>
             <text class="label">备注</text><textarea :value="draft.note" class="textarea character-note" maxlength="500" placeholder="可填写人物、用途或声音特点" @input="$emit('update-draft',{field:'note',value:$event.detail.value})"></textarea>
             <text class="label">默认配音方式</text>
             <view class="engine-options"><button class="engine-option" :class="{active:draft.default_tts_engine==='indextts2_legacy'}" @click="$emit('update-draft',{field:'default_tts_engine',value:'indextts2_legacy'})"><text>情绪参数配音</text></button><button class="engine-option" :class="{active:draft.default_tts_engine==='indextts2_voice_clone'}" @click="$emit('update-draft',{field:'default_tts_engine',value:'indextts2_voice_clone'})"><text>音色与情感参考</text></button></view>
