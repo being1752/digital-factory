@@ -61,6 +61,16 @@ class ProjectRepository:
             )
             db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS character_profiles (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_production_tasks_queue
                 ON production_tasks(status, priority DESC, created_at ASC)
                 """
@@ -160,6 +170,57 @@ class ProjectRepository:
         if deleted:
             self._notify("project_deleted", {"id": project_id})
         return deleted
+
+    def create_character_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
+        timestamp = now_iso()
+        profile = {**profile, "created_at": timestamp, "updated_at": timestamp}
+        with self.lock, self._connect() as db:
+            db.execute(
+                "INSERT INTO character_profiles(id, created_at, updated_at, payload) VALUES (?, ?, ?, ?)",
+                (profile["id"], timestamp, timestamp, json.dumps(profile, ensure_ascii=False)),
+            )
+        return profile
+
+    def get_character_profile(self, profile_id: str) -> dict[str, Any] | None:
+        with self.lock, self._connect() as db:
+            row = db.execute(
+                "SELECT payload FROM character_profiles WHERE id = ?", (profile_id,)
+            ).fetchone()
+        return json.loads(row["payload"]) if row else None
+
+    def list_character_profiles(self) -> list[dict[str, Any]]:
+        with self.lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT payload FROM character_profiles ORDER BY updated_at DESC"
+            ).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    def update_character_profile(
+        self, profile_id: str, **changes: Any
+    ) -> dict[str, Any]:
+        with self.lock:
+            profile = self.get_character_profile(profile_id)
+            if not profile:
+                raise KeyError(profile_id)
+            profile.update(changes)
+            profile["updated_at"] = now_iso()
+            with self._connect() as db:
+                db.execute(
+                    "UPDATE character_profiles SET updated_at = ?, payload = ? WHERE id = ?",
+                    (
+                        profile["updated_at"],
+                        json.dumps(profile, ensure_ascii=False),
+                        profile_id,
+                    ),
+                )
+        return profile
+
+    def delete_character_profile(self, profile_id: str) -> bool:
+        with self.lock, self._connect() as db:
+            cursor = db.execute(
+                "DELETE FROM character_profiles WHERE id = ?", (profile_id,)
+            )
+        return cursor.rowcount > 0
 
     @staticmethod
     def _task_from_row(row: sqlite3.Row) -> dict[str, Any]:

@@ -109,8 +109,23 @@ class AppSettingsPatch(BaseModel):
     music_library_path: str | None = None
 
 
+class CharacterProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    note: str = Field(default="", max_length=500)
+    default_tts_engine: TTSEngine = "indextts2_legacy"
+    emotion: EmotionVector = Field(default_factory=EmotionVector)
+
+
+class CharacterProfilePatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    note: str | None = Field(default=None, max_length=500)
+    default_tts_engine: TTSEngine | None = None
+    emotion: EmotionVector | None = None
+
+
 class ProjectCreate(BaseModel):
     original_script: str
+    character_profile_id: str | None = None
     title: str = "未命名项目"
     purpose: str = "品牌口播"
     audience: str = "普通观众"

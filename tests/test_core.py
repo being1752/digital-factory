@@ -177,6 +177,55 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(project["bgm_name"], "selected.mp3")
             self.assertEqual(Path(project["bgm_path"]).read_bytes(), b"selected-music")
 
+    def test_character_profile_assets_are_copied_into_new_project(self) -> None:
+        from app import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_dir = root / "data"
+            profile_dir = data_dir / "character_profiles" / "person-one"
+            profile_dir.mkdir(parents=True)
+            portrait = profile_dir / "portrait.png"
+            voice = profile_dir / "voice.flac"
+            emotion_voice = profile_dir / "emotion_voice.m4a"
+            portrait.write_bytes(b"portrait")
+            voice.write_bytes(b"voice")
+            emotion_voice.write_bytes(b"emotion")
+            repository = ProjectRepository(data_dir / "jobs.db")
+            repository.create_character_profile(
+                {
+                    "id": "person-one",
+                    "name": "测试角色",
+                    "default_tts_engine": "indextts2_voice_clone",
+                    "emotion": {"Happy": 0.4, "Neutral": 0.6},
+                    "profile_dir": str(profile_dir),
+                    "image_path": str(portrait),
+                    "voice_path": str(voice),
+                    "emotion_voice_path": str(emotion_voice),
+                }
+            )
+            configured = replace(settings, root=root, data_dir=data_dir)
+            with (
+                patch.object(main, "repository", repository),
+                patch.object(main, "settings", configured),
+            ):
+                project = main.create_default_project(
+                    ProjectCreate(
+                        original_script="测试",
+                        character_profile_id="person-one",
+                        tts_engine="indextts2_voice_clone",
+                        bgm_enabled=False,
+                    )
+                )
+
+            self.assertEqual(Path(project["image_path"]).read_bytes(), b"portrait")
+            self.assertEqual(Path(project["voice_path"]).read_bytes(), b"voice")
+            self.assertEqual(
+                Path(project["emotion_voice_path"]).read_bytes(), b"emotion"
+            )
+            self.assertEqual(project["character_profile_name"], "测试角色")
+            self.assertNotEqual(Path(project["image_path"]).parent, profile_dir)
+
     def test_random_music_copies_one_supported_file_into_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1108,6 +1157,102 @@ class CoreTests(unittest.TestCase):
                 None,  # type: ignore[arg-type]
             )
             self.assertEqual(runner._comfy_url(), "http://comfy.global")
+
+    def test_failed_video_retry_submits_a_fresh_prompt(self) -> None:
+        from app.orchestrator import TaskRunner
+
+        async def scenario() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                image = root / "portrait.png"
+                audio = root / "speech.flac"
+                image.write_bytes(b"image")
+                audio.write_bytes(b"audio")
+                repository = ProjectRepository(root / "jobs.db")
+                repository.create(
+                    {
+                        "id": "video-retry",
+                        "project_dir": str(root),
+                        "status": "ERROR",
+                        "image_path": str(image),
+                        "audio_path": str(audio),
+                        "segments": [{"action_prompt": "person speaking"}],
+                        "seed": 123,
+                        "video_prompt_id": "failed-prompt",
+                    }
+                )
+                cancelled: list[str] = []
+
+                class Compiler:
+                    @staticmethod
+                    def compact_action_prompt(value):
+                        return value
+
+                    @staticmethod
+                    def compile_video(*args):
+                        return {"1": {}}
+
+                    @staticmethod
+                    def video_segment_node_map(*args):
+                        return {}
+
+                class Client:
+                    def __init__(self, *args):
+                        pass
+
+                    async def cancel(self, prompt_id):
+                        cancelled.append(prompt_id)
+
+                    async def upload(self, path, remote_name):
+                        return remote_name
+
+                    async def run_with_progress(self, workflow, on_submitted, on_progress):
+                        await on_submitted("fresh-prompt")
+                        return "fresh-prompt", {"outputs": {}}
+
+                    @staticmethod
+                    def artifacts(history):
+                        return [{"filename": "fresh.mp4", "subfolder": "", "type": "output"}]
+
+                    async def download(self, artifact, destination):
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        destination.write_bytes(b"video")
+                        return destination
+
+                runner = TaskRunner(
+                    settings,
+                    repository,
+                    None,  # type: ignore[arg-type]
+                    None,  # type: ignore[arg-type]
+                    Compiler(),  # type: ignore[arg-type]
+                )
+                with patch("app.orchestrator.ComfyUIClient", Client):
+                    await runner.generate_video("video-retry")
+
+                project = repository.get("video-retry") or {}
+                self.assertEqual(cancelled, ["failed-prompt"])
+                self.assertEqual(project["video_prompt_id"], "fresh-prompt")
+                self.assertEqual(project["status"], "COMPLETED")
+                self.assertEqual(project["video_segment_current"], 1)
+
+        asyncio.run(scenario())
+
+    def test_queue_error_summary_keeps_reason_without_full_trace(self) -> None:
+        from app.main import public_error_summary
+
+        error = {
+            "type": "ComfyUIError",
+            "message": (
+                'ComfyUI 执行失败：[["execution_error", {'
+                '"node_id":"335","node_type":"KSampler",'
+                '"exception_message":"CUDA out of memory"}]]' + "trace" * 200
+            ),
+        }
+        summary = public_error_summary(error)
+        self.assertEqual(summary["type"], "ComfyUIError")
+        self.assertIn("CUDA out of memory", summary["message"])
+        self.assertIn("KSampler / 335", summary["message"])
+        self.assertLessEqual(len(summary["message"]), 180)
 
     def test_repository_can_delete_one_project_without_touching_others(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

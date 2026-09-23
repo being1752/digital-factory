@@ -252,9 +252,34 @@ class TaskRunner:
             bgm_path = Path(project.get("bgm_path") or "")
             if not bgm_path.is_file():
                 raise ValueError("已启用背景音乐，但没有可用的背景音乐文件")
-        if project.get("video_prompt_id"):
-            await self.resume_video(project_id)
-            return
+        previous_prompt_id = str(project.get("video_prompt_id") or "").strip()
+        if previous_prompt_id:
+            if project.get("status") == "GENERATING_VIDEO":
+                # Only process/server recovery may continue the original prompt.
+                await self.resume_video(project_id)
+                return
+            # A retry after an error or cancellation always starts a fresh video.
+            # Stop the old prompt if it is still present, then discard all node
+            # progress that belonged to the failed attempt.
+            try:
+                await ComfyUIClient(
+                    self._comfy_url(), self.settings.comfy_timeout_seconds
+                ).cancel(previous_prompt_id)
+            except Exception:
+                pass
+            project = self.repository.update(
+                project_id,
+                video_prompt_id=None,
+                video_segment_current=0,
+                video_segment_completed=0,
+                video_segment_progress=0.0,
+                video_segment_nodes={},
+                video_current_node_id=None,
+                video_node_value=0,
+                video_node_max=0,
+                video_progress_mode=None,
+                video_progress_note=None,
+            )
         self.repository.update(project_id, status="UPLOADING_VIDEO_ASSETS", progress=3)
         client = ComfyUIClient(self._comfy_url(), self.settings.comfy_timeout_seconds)
         image_path, audio_path = Path(project["image_path"]), Path(project["audio_path"])

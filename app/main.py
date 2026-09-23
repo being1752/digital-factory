@@ -34,6 +34,8 @@ from .production_queue import ProductionQueue
 from .repository import ProjectRepository
 from .schemas import (
     AppSettingsPatch,
+    CharacterProfileCreate,
+    CharacterProfilePatch,
     ComfyCheckRequest,
     ProjectCreate,
     ProjectPatch,
@@ -83,6 +85,36 @@ def global_music_library_path() -> Path:
     if not candidate.is_absolute():
         candidate = settings.root / candidate
     return candidate.resolve()
+
+
+def character_profile_directory(profile_id: str) -> Path:
+    root = (settings.data_dir / "character_profiles").resolve()
+    target = (root / profile_id).resolve()
+    if target.parent != root or target.name != profile_id:
+        raise HTTPException(409, "角色配置目录无效")
+    return target
+
+
+def public_character_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    profile_id = str(profile["id"])
+    image_path = Path(str(profile.get("image_path") or ""))
+    voice_path = Path(str(profile.get("voice_path") or ""))
+    emotion_voice_path = Path(str(profile.get("emotion_voice_path") or ""))
+    return {
+        "id": profile_id,
+        "name": profile.get("name", profile_id),
+        "note": profile.get("note", ""),
+        "default_tts_engine": profile.get("default_tts_engine", "indextts2_legacy"),
+        "emotion": profile.get("emotion") or {},
+        "has_image": image_path.is_file(),
+        "has_voice": voice_path.is_file(),
+        "has_emotion_voice": emotion_voice_path.is_file(),
+        "image_url": f"/api/character-profiles/{profile_id}/files/image",
+        "voice_url": f"/api/character-profiles/{profile_id}/files/voice",
+        "emotion_voice_url": f"/api/character-profiles/{profile_id}/files/emotion_voice",
+        "created_at": profile.get("created_at"),
+        "updated_at": profile.get("updated_at"),
+    }
 
 
 PROJECT_DISPLAY_PROGRESS = {
@@ -266,6 +298,48 @@ def task_display_state(
     }
 
 
+def public_error_summary(error: Any, max_chars: int = 180) -> dict[str, Any] | None:
+    """Return a compact card error while project detail keeps full diagnostics."""
+    if not error:
+        return None
+    if isinstance(error, dict):
+        error_type = str(error.get("type") or "任务执行失败")
+        raw_message = str(error.get("message") or error_type)
+    else:
+        error_type = "任务执行失败"
+        raw_message = str(error)
+
+    node_id_match = re.search(r'"node_id"\s*:\s*"?([^",}\s]+)', raw_message)
+    node_type_match = re.search(r'"node_type"\s*:\s*"([^"]+)', raw_message)
+    exception_match = re.search(
+        r'"exception_message"\s*:\s*"((?:\\.|[^"\\])*)"', raw_message
+    )
+    node_id = node_id_match.group(1) if node_id_match else ""
+    node_type = node_type_match.group(1) if node_type_match else ""
+
+    if exception_match:
+        try:
+            core = json.loads(f'"{exception_match.group(1)}"')
+        except (json.JSONDecodeError, TypeError):
+            core = exception_match.group(1)
+    elif "execution_interrupted" in raw_message:
+        core = "ComfyUI 执行被中断"
+    else:
+        core = re.sub(r"\s+", " ", raw_message).strip()
+
+    location = ""
+    if node_type or node_id:
+        node_label = node_type or node_id
+        if node_type and node_id:
+            node_label += f" / {node_id}"
+        location = f"（节点 {node_label}）"
+    message = re.sub(r"\s+", " ", f"{core}{location}").strip()
+    truncated = len(message) > max_chars
+    if truncated:
+        message = message[: max_chars - 1].rstrip() + "…"
+    return {"type": error_type, "message": message, "truncated": truncated}
+
+
 def public_task(task: dict[str, Any], queue_position: int | None = None) -> dict[str, Any]:
     result = dict(task)
     project = repository.get(task["project_id"])
@@ -342,7 +416,7 @@ def public_project_summary(project: dict[str, Any]) -> dict[str, Any]:
         "video_segment_completed": project.get("video_segment_completed"),
         "video_segment_total": project.get("video_segment_total"),
         "video_segment_progress": project.get("video_segment_progress"),
-        "error": project.get("error"),
+        "error": public_error_summary(project.get("error")),
     }
 
 
@@ -358,6 +432,7 @@ def public_task_summary(task: dict[str, Any], queue_position: int | None = None)
         "video_progress_mode", "can_delete",
     )
     result = {key: full.get(key) for key in keys if key in full}
+    result["error"] = public_error_summary(full.get("error"))
     result["tts_engine"] = (task.get("snapshot") or {}).get("tts_engine")
     return result
 
@@ -485,11 +560,146 @@ async def save_upload(upload: UploadFile, destination: Path, limit: int) -> None
     destination.write_bytes(content)
 
 
+@app.get("/api/character-profiles")
+async def list_character_profiles() -> list[dict[str, Any]]:
+    return [
+        public_character_profile(profile)
+        for profile in repository.list_character_profiles()
+    ]
+
+
+@app.post("/api/character-profiles")
+async def create_character_profile(
+    payload: CharacterProfileCreate,
+) -> dict[str, Any]:
+    profile_id = uuid.uuid4().hex[:12]
+    profile_dir = character_profile_directory(profile_id)
+    profile_dir.mkdir(parents=True, exist_ok=False)
+    profile = repository.create_character_profile(
+        {
+            "id": profile_id,
+            "name": payload.name.strip(),
+            "note": payload.note.strip(),
+            "default_tts_engine": payload.default_tts_engine,
+            "emotion": payload.emotion.model_dump(),
+            "profile_dir": str(profile_dir),
+            "image_path": None,
+            "voice_path": None,
+            "emotion_voice_path": None,
+        }
+    )
+    return public_character_profile(profile)
+
+
+@app.patch("/api/character-profiles/{profile_id}")
+async def patch_character_profile(
+    profile_id: str, payload: CharacterProfilePatch
+) -> dict[str, Any]:
+    changes = payload.model_dump(exclude_none=True)
+    if "name" in changes:
+        changes["name"] = changes["name"].strip()
+    if "note" in changes:
+        changes["note"] = changes["note"].strip()
+    if "emotion" in changes and payload.emotion:
+        changes["emotion"] = payload.emotion.model_dump()
+    try:
+        profile = repository.update_character_profile(profile_id, **changes)
+    except KeyError as exc:
+        raise HTTPException(404, "角色配置不存在") from exc
+    return public_character_profile(profile)
+
+
+@app.post("/api/character-profiles/{profile_id}/assets/{kind}")
+async def upload_character_profile_asset(
+    profile_id: str, kind: str, file: UploadFile = File(...)
+) -> dict[str, Any]:
+    profile = repository.get_character_profile(profile_id)
+    if not profile:
+        raise HTTPException(404, "角色配置不存在")
+    suffix = Path(file.filename or "").suffix.lower()
+    if kind == "image":
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+            raise HTTPException(422, "数字人图片仅支持 PNG、JPG、WEBP")
+        field, stem, limit = "image_path", "portrait", 25 * 1024 * 1024
+    elif kind in {"voice", "emotion_voice"}:
+        if suffix not in {".wav", ".flac", ".mp3", ".m4a", ".m4s", ".mp4", ".ogg"}:
+            raise HTTPException(422, "参考音频格式不支持")
+        field = "voice_path" if kind == "voice" else "emotion_voice_path"
+        stem, limit = kind, 100 * 1024 * 1024
+    else:
+        raise HTTPException(404, "未知角色素材类型")
+    profile_dir = character_profile_directory(profile_id)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    destination = profile_dir / f"{stem}{suffix}"
+    await save_upload(file, destination, limit)
+    previous = Path(str(profile.get(field) or ""))
+    if previous.is_file() and previous != destination and previous.parent == profile_dir:
+        previous.unlink(missing_ok=True)
+    profile = repository.update_character_profile(profile_id, **{field: str(destination)})
+    return public_character_profile(profile)
+
+
+@app.get("/api/character-profiles/{profile_id}/files/{kind}")
+async def character_profile_file(profile_id: str, kind: str) -> FileResponse:
+    profile = repository.get_character_profile(profile_id)
+    if not profile:
+        raise HTTPException(404, "角色配置不存在")
+    field = {
+        "image": "image_path",
+        "voice": "voice_path",
+        "emotion_voice": "emotion_voice_path",
+    }.get(kind)
+    if not field:
+        raise HTTPException(404, "未知角色素材类型")
+    path = Path(str(profile.get(field) or ""))
+    if not path.is_file() or path.parent.resolve() != character_profile_directory(profile_id):
+        raise HTTPException(404, "角色素材不存在")
+    return FileResponse(
+        path,
+        filename=path.name,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@app.delete("/api/character-profiles/{profile_id}")
+async def delete_character_profile(profile_id: str) -> dict[str, Any]:
+    profile = repository.get_character_profile(profile_id)
+    if not profile:
+        raise HTTPException(404, "角色配置不存在")
+    profile_dir = character_profile_directory(profile_id)
+    if profile_dir.exists():
+        shutil.rmtree(profile_dir)
+    repository.delete_character_profile(profile_id)
+    return {"id": profile_id, "deleted": True}
+
+
 def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
     if not payload.original_script.strip():
         raise HTTPException(422, "口播文案不能为空")
-    image_source = settings.root / "专业肖像照.png"
-    voice_source = settings.root / "40049511080-1-30280.m4s"
+    profile = None
+    if payload.character_profile_id:
+        profile = repository.get_character_profile(payload.character_profile_id)
+        if not profile:
+            raise HTTPException(404, "选择的角色配置不存在")
+    profile_image = Path(str((profile or {}).get("image_path") or ""))
+    profile_voice = Path(str((profile or {}).get("voice_path") or ""))
+    profile_emotion_voice = Path(str((profile or {}).get("emotion_voice_path") or ""))
+    image_source = (
+        profile_image if profile_image.is_file() else settings.root / "专业肖像照.png"
+    )
+    voice_source = (
+        profile_voice
+        if profile_voice.is_file()
+        else settings.root / "40049511080-1-30280.m4s"
+    )
+    emotion_voice_source = (
+        profile_emotion_voice if profile_emotion_voice.is_file() else None
+    )
+    if profile and not profile_image.is_file() and not payload.expect_image_upload:
+        raise HTTPException(422, "角色配置缺少数字人图片，请补充图片或为本次任务重新选择")
+    if profile and not profile_voice.is_file() and not payload.expect_voice_upload:
+        raise HTTPException(422, "角色配置缺少音色参考音频，请补充音频或为本次任务重新选择")
     if not image_source.exists() and not payload.expect_image_upload:
         raise HTTPException(422, "默认图片不存在，请选择并上传数字人图片")
     if not voice_source.exists() and not payload.expect_voice_upload:
@@ -497,6 +707,7 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
     if (
         payload.tts_engine == "indextts2_voice_clone"
         and not payload.expect_emotion_voice_upload
+        and emotion_voice_source is None
     ):
         raise HTTPException(422, "IndexTTS2 音色与情感克隆版请选择并上传情感参考音频")
     if (
@@ -511,7 +722,11 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
     input_dir.mkdir(parents=True, exist_ok=True)
     image_path = input_dir / f"portrait{image_source.suffix or '.png'}"
     voice_path = input_dir / f"voice{voice_source.suffix or '.m4a'}"
-    emotion_voice_path = input_dir / "emotion_voice.m4a"
+    emotion_voice_path = input_dir / (
+        f"emotion_voice{emotion_voice_source.suffix}"
+        if emotion_voice_source
+        else "emotion_voice.m4a"
+    )
     bgm_path: Path | None = (
         input_dir / "background_music.mp3" if payload.bgm_enabled else None
     )
@@ -530,6 +745,8 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
         shutil.copyfile(image_source, image_path)
     if voice_source.exists() and not payload.expect_voice_upload:
         shutil.copyfile(voice_source, voice_path)
+    if emotion_voice_source and not payload.expect_emotion_voice_upload:
+        shutil.copyfile(emotion_voice_source, emotion_voice_path)
     return repository.create(
         {
             "id": project_id,
@@ -539,6 +756,8 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
             "audience": payload.audience.strip(),
             "requested_style": payload.requested_style.strip(),
             "tts_engine": payload.tts_engine,
+            "character_profile_id": payload.character_profile_id,
+            "character_profile_name": (profile or {}).get("name"),
             "auto_run": payload.auto_run,
             "assets_pending": bool(
                 payload.expect_image_upload
@@ -592,7 +811,7 @@ def create_default_project(payload: ProjectCreate) -> dict[str, Any]:
             "audio_started": False,
             "error": None,
             "script": "",
-            "emotion": {},
+            "emotion": (profile or {}).get("emotion") or {},
             "segments": [],
         }
     )

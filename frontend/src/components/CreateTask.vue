@@ -2,6 +2,24 @@
 <view class="panel create-card">
           <text class="eyebrow">PHASE TWO</text><text class="hero">从一张照片，到完整口播视频</text>
           <text class="lead">根据口播内容自动匹配配音、表情和动作，生成自然连贯的数字人口播视频。</text>
+          <view class="character-profile-panel">
+            <view class="create-section-head"><view><text class="section-index">角色</text><text class="plan-title">常用数字人配置</text></view><text class="hint">保存后可直接加载图片和参考声音</text></view>
+            <view class="character-profile-row">
+              <image v-if="selectedProfileImage" class="character-profile-avatar" :src="selectedProfileImage" mode="aspectFill" />
+              <view class="character-profile-select">
+                <text class="label">加载角色配置</text>
+                <picker v-if="profiles.length" :range="profiles" range-key="name" @change="$emit('select-profile',profiles[$event.detail.value]?.id||'')"><view class="field picker-field">{{ selectedProfile?.name || '点击选择已保存角色' }}</view></picker>
+                <view v-else class="field picker-field">暂时没有已保存角色</view>
+                <text class="hint">{{ selectedProfile ? `${selectedProfile.has_voice?'已保存音色':'缺少音色'} · ${selectedProfile.has_emotion_voice?'已保存情感参考':'未保存情感参考'}` : '可在下方选择素材后保存' }}</text>
+              </view>
+            </view>
+            <view class="actions profile-actions">
+              <button class="ghost small" @click="$emit('save-profile')">保存为新配置</button>
+              <button v-if="selectedProfile" class="ghost small" @click="$emit('update-profile')">修改当前配置</button>
+              <button v-if="selectedProfile" class="ghost small" @click="$emit('select-profile','')">清除选择</button>
+              <button v-if="selectedProfile" class="danger-button small" @click="$emit('delete-profile')">删除配置</button>
+            </view>
+          </view>
           <view class="create-section">
             <view class="create-section-head"><view><text class="section-index">01</text><text class="plan-title">任务内容</text></view><text class="hint">{{ scriptSummary }}</text></view>
           <view><text class="label">项目名称</text><textarea :value="form.title" class="field project-title-field" maxlength="100" auto-height @input="$emit('set-title',$event)"></textarea></view>
@@ -12,15 +30,15 @@
             <view class="create-section-head"><view><text class="section-index">02</text><text class="plan-title">数字人与声音素材</text></view><text class="hint">选择声音效果，并上传需要的参考素材</text></view>
           <view><text class="label">配音方式</text><view class="engine-options"><button class="engine-option" :class="{active:!form.tts_engine||form.tts_engine==='indextts2_legacy'}" @click="form.tts_engine='indextts2_legacy'"><text>情绪参数配音</text><text class="hint">使用参考音色，可在导演方案中调整整体情绪比例</text></button><button class="engine-option" :class="{active:form.tts_engine==='indextts2_voice_clone'}" @click="form.tts_engine='indextts2_voice_clone'"><text>音色与情感参考</text><text class="hint">分别参考说话音色和情绪表达，还原更接近示例的声音</text></button></view></view>
           <view class="uploads">
-            <view class="upload-box image-upload" :class="{selected:Boolean(imagePath)}" @click="$emit('choose-image')">
-              <image v-if="imagePath" class="upload-preview" :src="imagePath" mode="aspectFill" />
-              <view class="upload-copy"><text>数字人图片</text><text v-if="imagePath" class="upload-status">✓ 已选择</text><text class="hint file-name">{{ imageFileName || '点击选择；不选使用默认图片' }}</text></view>
+            <view class="upload-box image-upload" :class="{selected:Boolean(imagePath||selectedProfile?.has_image)}" @click="$emit('choose-image')">
+              <image v-if="imagePath||selectedProfileImage" class="upload-preview" :src="imagePath||selectedProfileImage" mode="aspectFill" />
+              <view class="upload-copy"><text>数字人图片</text><text v-if="imagePath||selectedProfile?.has_image" class="upload-status">✓ {{ imagePath ? '已选择' : '已从配置加载' }}</text><text class="hint file-name">{{ imageFileName || (selectedProfile?.has_image ? selectedProfile.name : '点击选择；不选使用默认图片') }}</text></view>
             </view>
-            <view class="upload-box" :class="{selected:Boolean(voicePath)}" @click="$emit('choose-voice')">
-              <text class="upload-icon">♪</text><text>音色参考音频</text><text v-if="voicePath" class="upload-status">✓ 已选择</text><text class="hint file-name">{{ voiceFileName || '点击选择；不选使用默认音色' }}</text>
+            <view class="upload-box" :class="{selected:Boolean(voicePath||selectedProfile?.has_voice)}" @click="$emit('choose-voice')">
+              <text class="upload-icon">♪</text><text>音色参考音频</text><text v-if="voicePath||selectedProfile?.has_voice" class="upload-status">✓ {{ voicePath ? '已选择' : '已从配置加载' }}</text><text class="hint file-name">{{ voiceFileName || (selectedProfile?.has_voice ? selectedProfile.name : '点击选择；不选使用默认音色') }}</text>
             </view>
-            <view v-if="form.tts_engine==='indextts2_voice_clone'" class="upload-box emotion-reference" :class="{selected:Boolean(emotionVoicePath)}" @click="$emit('choose-emotion-voice')">
-              <text class="upload-icon">♫</text><text>情感参考音频</text><text v-if="emotionVoicePath" class="upload-status">✓ 已选择</text><text class="hint file-name">{{ emotionVoiceFileName || '用于参考说话语气和情绪表达' }}</text>
+            <view v-if="form.tts_engine==='indextts2_voice_clone'" class="upload-box emotion-reference" :class="{selected:Boolean(emotionVoicePath||selectedProfile?.has_emotion_voice)}" @click="$emit('choose-emotion-voice')">
+              <text class="upload-icon">♫</text><text>情感参考音频</text><text v-if="emotionVoicePath||selectedProfile?.has_emotion_voice" class="upload-status">✓ {{ emotionVoicePath ? '已选择' : '已从配置加载' }}</text><text class="hint file-name">{{ emotionVoiceFileName || (selectedProfile?.has_emotion_voice ? selectedProfile.name : '用于参考说话语气和情绪表达') }}</text>
             </view>
           </view>
           </view>
@@ -102,8 +120,8 @@
 <script>
 export default {
   name:'CreateTask',
-  props:{form:{type:Object,required:true},createPanels:{type:Object,required:true},fontOptions:{type:Array,default:()=>[]},subtitleColors:{type:Array,default:()=>[]},subtitlePositions:{type:Array,default:()=>[]},scriptSummary:{type:String,default:''},createChecks:{type:Array,default:()=>[]},createReady:Boolean,imagePath:{type:String,default:''},imageFileName:{type:String,default:''},voicePath:{type:String,default:''},voiceFileName:{type:String,default:''},emotionVoicePath:{type:String,default:''},emotionVoiceFileName:{type:String,default:''},bgmPath:{type:String,default:''},bgmFileName:{type:String,default:''},bgmRandomName:{type:String,default:''},bgmPreviewPlaying:Boolean,submitting:Boolean,uploadLabel:{type:String,default:''},uploadProgress:{type:Number,default:0}},
-  emits:['set-title','choose-image','choose-voice','choose-emotion-voice','choose-bgm','choose-random-bgm-preview','preview-bgm','stop-bgm-preview','update-bgm-preview-volume','toggle-panel','set-auto-run','set-bgm-enabled','set-bgm-ducking','set-title-enabled','set-subtitle-enabled','set-subtitle-bold','set-subtitle-background','apply-title-preset','apply-subtitle-preset','submit'],
+  props:{form:{type:Object,required:true},profiles:{type:Array,default:()=>[]},selectedProfile:{type:Object,default:null},selectedProfileImage:{type:String,default:''},createPanels:{type:Object,required:true},fontOptions:{type:Array,default:()=>[]},subtitleColors:{type:Array,default:()=>[]},subtitlePositions:{type:Array,default:()=>[]},scriptSummary:{type:String,default:''},createChecks:{type:Array,default:()=>[]},createReady:Boolean,imagePath:{type:String,default:''},imageFileName:{type:String,default:''},voicePath:{type:String,default:''},voiceFileName:{type:String,default:''},emotionVoicePath:{type:String,default:''},emotionVoiceFileName:{type:String,default:''},bgmPath:{type:String,default:''},bgmFileName:{type:String,default:''},bgmRandomName:{type:String,default:''},bgmPreviewPlaying:Boolean,submitting:Boolean,uploadLabel:{type:String,default:''},uploadProgress:{type:Number,default:0}},
+  emits:['set-title','select-profile','save-profile','update-profile','delete-profile','choose-image','choose-voice','choose-emotion-voice','choose-bgm','choose-random-bgm-preview','preview-bgm','stop-bgm-preview','update-bgm-preview-volume','toggle-panel','set-auto-run','set-bgm-enabled','set-bgm-ducking','set-title-enabled','set-subtitle-enabled','set-subtitle-bold','set-subtitle-background','apply-title-preset','apply-subtitle-preset','submit'],
   computed:{titleColorRows(){return [{label:'第一行颜色',field:'video_title_primary_color'},{label:'第二行颜色',field:'video_title_secondary_color'},{label:'第三行颜色',field:'video_title_tertiary_color'}]}},
   methods:{
     selectBgmSource(value){this.form.bgm_source=value;this.$emit('stop-bgm-preview')},
